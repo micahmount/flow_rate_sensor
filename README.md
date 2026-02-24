@@ -105,6 +105,18 @@ Home Assistant will confirm the connection. You're now ready to receive data fro
 
 ---
 
+## Setting Up ESP32 Development Environment
+
+This project uses MicroPython, but if you want to develop or debug further, you'll need the ESP32 toolchain.
+
+For full setup instructions on Linux and macOS, see the official Espressif documentation:
+
+**https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/linux-macos-setup.html**
+
+This covers installing the ESP-IDF (Espressif IoT Development Framework), required dependencies, and configuring your environment for ESP32 development.
+
+---
+
 ## Flashing MicroPython to the ESP32
 
 If your ESP32 doesn't already have MicroPython on it, follow these steps.
