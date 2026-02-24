@@ -9,13 +9,12 @@ A complete DIY keg level monitor using a hall effect flow sensor, an ESP32, Micr
 1. [Parts List](#parts-list)
 2. [How It Works](#how-it-works)
 3. [Wiring](#wiring)
-4. [Setting Up the MQTT Broker in Home Assistant](#setting-up-the-mqtt-broker-in-home-assistant)
-5. [Flashing MicroPython to the ESP32](#flashing-micropython-to-the-esp32)
-6. [Installing the Firmware](#installing-the-firmware)
-7. [Configuring and Deploying the Code](#configuring-and-deploying-the-code)
-8. [Setting Up the Home Assistant Dashboard](#setting-up-the-home-assistant-dashboard)
-9. [Resetting for a New Keg](#resetting-for-a-new-keg)
-10. [Troubleshooting](#troubleshooting)
+4. [Home Assistant Setup](#home-assistant-setup)
+5. [ESP32 Setup](#esp32-setup)
+6. [Configuring and Deploying the Code](#configuring-and-deploying-the-code)
+7. [Setting Up the Dashboard](#setting-up-the-dashboard)
+8. [Resetting for a New Keg](#resetting-for-a-new-keg)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -60,64 +59,118 @@ Connect the sensor's wires to the ESP32 as follows:
 
 ---
 
-## Setting Up the MQTT Broker in Home Assistant
+## Home Assistant Setup
 
-MQTT is the messaging protocol the ESP32 uses to send data to Home Assistant. Home Assistant includes its own built-in MQTT broker called **Mosquitto** that you can install as an add-on in under five minutes.
+Since you're running Home Assistant Container (without the Apps panel), you'll run Mosquitto as a separate Docker container.
 
-### Step 1 — Install the Mosquitto Broker Add-on
+### Step 1 — Run Mosquitto as a Docker Container
 
-1. In Home Assistant, go to **Settings → Add-ons → Add-on Store** (button in the bottom right)
-2. Search for **"Mosquitto broker"**
-3. Click it and then click **Install**
-4. Once installed, click **Start**
-5. Toggle on **Start on boot** and **Watchdog** so it restarts automatically
+MQTT is the messaging protocol the ESP32 uses to send data to Home Assistant. Run the Mosquitto broker in Docker with authentication:
 
-### Step 2 — Create an MQTT User Account
+First, create a password file for Mosquitto:
 
-The ESP32 needs credentials to connect to the broker. The cleanest way to do this is to create a dedicated Home Assistant user:
+```bash
+# Create a directory for the config
+mkdir -p ~/mosquitto/config
 
-1. Go to **Settings → People → Users**
-2. Click **Add User**
-3. Fill in a name (e.g. `mqtt_esp32`), username, and password
-4. Turn **off** "Can log in" — this user is for devices only, not humans
-5. Click **Create**
+# Generate password file (replace mqtt_esp32 with your desired username)
+docker run --rm -it eclipse-mosquitto:latest mosquitto_passwd -c ~/mosquitto/config/mosquitto.passwd mqtt_esp32
+```
 
-> Write down the username and password — you'll need them in the next section.
+Create `~/mosquitto/config/mosquitto.conf`:
 
-### Step 3 — Configure the Mosquitto Add-on
+```
+listener 1883
+allow_anonymous false
+password_file /mosquitto/config/mosquitto.passwd
+```
 
-1. Go back to **Settings → Add-ons → Mosquitto broker**
-2. Click the **Configuration** tab
-3. The default configuration works out of the box. You don't need to add anything — Mosquitto automatically allows Home Assistant users to authenticate.
-4. Click **Save**, then restart the add-on
+Now run the container:
 
-### Step 4 — Add the MQTT Integration to Home Assistant
+```bash
+docker run -d \
+  --name mosquitto \
+  --restart unless-stopped \
+  -p 1883:1883 \
+  -v ~/mosquitto/config:/mosquitto/config \
+  eclipse-mosquitto:latest \
+  mosquitto -c /mosquitto/config/mosquitto.conf
+```
 
-1. Go to **Settings → Devices & Services**
+### Step 2 — Add the MQTT Integration to Home Assistant
+
+1. Go to **Settings** → **Devices & Services**
 2. Click **Add Integration** and search for **MQTT**
 3. Click **MQTT**
-4. For the broker address, enter `core-mosquitto` (if running on the same machine) or your HA's local IP address
+4. For the broker address, enter your Docker host's IP address (e.g., `192.168.1.100`)
 5. Port: `1883`
-6. Enter the username and password you created in Step 2
+6. Enter the username (`mqtt_esp32`) and password you created
 7. Click **Submit**
 
 Home Assistant will confirm the connection. You're now ready to receive data from the ESP32.
 
 ---
 
-## Setting Up ESP32 Development Environment
+## ESP32 Setup
 
-This project uses MicroPython, but if you want to develop or debug further, you'll need the ESP32 toolchain.
+### Step 1 — Install esptool
 
-For full setup instructions on Linux and macOS, see the official Espressif documentation:
+On your computer, open a terminal and run:
 
-**https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/linux-macos-setup.html**
+```bash
+pip install esptool
+```
 
-This covers installing the ESP-IDF (Espressif IoT Development Framework), required dependencies, and configuring your environment for ESP32 development.
+### Step 2 — Download MicroPython
 
-### Connecting with minicom (Ubuntu 24.04)
+Go to [micropython.org/download/ESP32_GENERIC](https://micropython.org/download/ESP32_GENERIC/) and download the latest stable `.bin` firmware file.
 
-To connect to the ESP32 REPL over serial using minicom:
+### Step 3 — Erase the ESP32
+
+Plug in your ESP32 via USB, then run (check `ls /dev/ttyUSB*` to find your device):
+
+```bash
+esptool.py --port /dev/ttyUSB0 erase_flash
+```
+
+### Step 4 — Flash MicroPython
+
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash -z 0x1000 ESP32_GENERIC-*.bin
+```
+
+Replace `ESP32_GENERIC-*.bin` with the actual filename you downloaded.
+
+### Step 5 — Install Thonny
+
+Download from [thonny.org](https://thonny.org) and install it. Thonny is the easiest way to connect to the ESP32 and transfer files.
+
+### Step 6 — Connect to the ESP32
+
+1. Open Thonny
+2. Go to **Tools → Options → Interpreter**
+3. Select **MicroPython (ESP32)** from the dropdown
+4. Select the correct COM port
+5. Click **OK**
+
+You should see a MicroPython REPL prompt (`>>>`) at the bottom of the Thonny window.
+
+### Step 7 — Verify umqtt is Available
+
+In the REPL, type:
+
+```python
+import umqtt.simple
+```
+
+If you get no error, you're good. If you get `ModuleNotFoundError`, install it by typing:
+
+```python
+import mip
+mip.install("umqtt.simple")
+```
+
+### Optional — Connecting with minicom (Ubuntu 24.04)
 
 ```bash
 sudo apt install minicom
@@ -137,101 +190,33 @@ To exit minicom, press `Ctrl+A`, then `X`, then `Enter`.
 
 ---
 
-## Flashing MicroPython to the ESP32
-
-If your ESP32 doesn't already have MicroPython on it, follow these steps.
-
-### Step 1 — Install esptool
-
-On your computer, open a terminal and run:
-
-```bash
-pip install esptool
-```
-
-### Step 2 — Download MicroPython
-
-Go to [micropython.org/download/ESP32_GENERIC](https://micropython.org/download/ESP32_GENERIC/) and download the latest stable `.bin` firmware file.
-
-### Step 3 — Erase the ESP32
-
-Plug in your ESP32 via USB, then run (replace `COM3` with your port — on macOS/Linux it will look like `/dev/ttyUSB0` or `/dev/tty.usbserial-*`):
-
-```bash
-esptool.py --port COM3 erase_flash
-```
-
-### Step 4 — Flash MicroPython
-
-```bash
-esptool.py --chip esp32 --port COM3 --baud 460800 write_flash -z 0x1000 ESP32_GENERIC-*.bin
-```
-
-Replace `ESP32_GENERIC-*.bin` with the actual filename you downloaded.
-
----
-
-## Installing the Firmware
-
-You'll use **Thonny** to connect to the ESP32 and transfer files. It's the easiest option and works on Windows, macOS, and Linux.
-
-### Step 1 — Install Thonny
-
-Download from [thonny.org](https://thonny.org) and install it.
-
-### Step 2 — Connect to the ESP32
-
-1. Open Thonny
-2. Go to **Tools → Options → Interpreter**
-3. Select **MicroPython (ESP32)** from the dropdown
-4. Select the correct COM port
-5. Click **OK**
-
-You should see a MicroPython REPL prompt (`>>>`) at the bottom of the Thonny window.
-
-### Step 3 — Verify umqtt is Available
-
-In the REPL, type:
-
-```python
-import umqtt.simple
-```
-
-If you get no error, you're good. If you get `ModuleNotFoundError`, install it by typing:
-
-```python
-import mip
-mip.install("umqtt.simple")
-```
-
----
-
 ## Configuring and Deploying the Code
 
-### Step 1 — Edit the Configuration
+### Step 1 — Configure Credentials
 
-Open `flow_sensor.py` and fill in your details at the top of the file:
+Copy `secrets.py.example` to `secrets.py` and fill in your details:
 
 ```python
 WIFI_SSID     = "your_wifi_ssid"
 WIFI_PASSWORD = "your_wifi_password"
 
-MQTT_BROKER   = "192.168.1.100"   # Your Home Assistant's local IP address
+MQTT_BROKER   = "192.168.1.100"   # Your Docker host's IP address
 MQTT_PORT     = 1883
-MQTT_USER     = "mqtt_esp32"      # The user you created in Mosquitto setup
-MQTT_PASSWORD = "your_password"
+MQTT_USER     = "mqtt_esp32"      # Username from mosquitto_passwd command
+MQTT_PASSWORD = "your_password"   # Password from mosquitto_passwd command
+MQTT_CLIENT_ID = "esp32_flow_sensor"
 ```
+
+To find your Docker host IP address, run `hostname -I` on the machine running Docker.
 
 To find your Home Assistant IP address, go to **Settings → System → Network** in HA.
 
-### Step 2 — Upload the File
+### Step 2 — Upload the Files
 
 In Thonny:
 
-1. Open `flow_sensor.py`
-2. Go to **File → Save As**
-3. When prompted, choose **MicroPython device**
-4. Save it as `main.py` — MicroPython automatically runs `main.py` on boot
+1. Open `flow_sensor.py` and save it as `main.py` on the MicroPython device
+2. Open `secrets.py` and save it on the MicroPython device
 
 ### Step 3 — Test It
 
@@ -254,36 +239,22 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 
 ---
 
-## Setting Up the Home Assistant Dashboard
+## Setting Up the Dashboard
 
-The dashboard uses the **Bar Card** custom component for the keg level bar. Install it first, then add the card.
-
-### Step 1 — Install Bar Card via HACS
-
-If you don't have HACS (Home Assistant Community Store) installed, follow the guide at [hacs.xyz](https://hacs.xyz) first — it takes about 5 minutes.
-
-Once HACS is installed:
-
-1. Go to **HACS → Frontend**
-2. Click **Explore & Download Repositories**
-3. Search for **"Bar Card"**
-4. Click it and click **Download**
-5. Restart Home Assistant
-
-### Step 2 — Add the Dashboard Card
+Add the sensors to your Home Assistant dashboard:
 
 1. Go to your Home Assistant dashboard
-2. Click the **pencil icon** (Edit) in the top right
+2. Click **Edit Dashboard** (three dots menu → Edit Dashboard)
 3. Click **Add Card**
-4. Scroll to the bottom and select **Manual**
-5. Delete the default YAML and paste in the contents of `keg_dashboard_card.yaml`
+4. Search for and add an **Entities Card**
+5. Select these entities:
+   - `sensor.water_flow_rate` — current flow rate in L/min
+   - `sensor.water_total_volume` — all-time total volume in L
+   - `sensor.keg_level` — keg fullness as a percentage
+   - `sensor.keg_remaining` — liters left in the keg
 6. Click **Save**
 
-The card will display:
-- A color-coded fill bar (amber → orange → red as the keg empties)
-- A glance row with percentage, liters remaining, and current flow rate
-- A "New Keg — Reset to Full" button
-- A 24-hour flow rate history graph
+You can also add individual **Sensor Cards** for each entity to customize the display.
 
 ---
 
@@ -302,7 +273,7 @@ home/flow_sensor/reset
 ## Troubleshooting
 
 **ESP32 won't connect to WiFi**
-Double-check your SSID and password in `flow_sensor.py`. Make sure your network is 2.4 GHz — the ESP32 does not support 5 GHz.
+Double-check your SSID and password in `secrets.py`. Make sure your network is 2.4 GHz — the ESP32 does not support 5 GHz.
 
 **MQTT connection refused**
 Verify the broker IP address is your Home Assistant machine's local IP, not `localhost`. Confirm the username and password match what you set up in the Mosquitto configuration. Make sure port 1883 isn't blocked by a firewall.
@@ -325,8 +296,8 @@ The sensor's calibration constant (23 Hz per L/min) is nominal. If you want high
 
 | File | Description |
 |---|---|
-| `flow_sensor.py` | Main ESP32 firmware — deploy this as `main.py` on the device |
-| `keg_dashboard_card.yaml` | Home Assistant dashboard card YAML |
+| `flow_sensor.py` | Main ESP32 firmware — deploy as `main.py` on the device |
+| `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
 
 ---
 

@@ -11,17 +11,21 @@ import time
 from machine import Pin
 from umqtt.simple import MQTTClient
 import ujson
+try:
+    import secrets
+except ImportError:
+    raise ImportError("secrets.py not found. Copy secrets.py.example to secrets.py and configure.")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-WIFI_SSID     = "your_wifi_ssid"
-WIFI_PASSWORD = "your_wifi_password"
+WIFI_SSID     = secrets.WIFI_SSID
+WIFI_PASSWORD = secrets.WIFI_PASSWORD
 
-MQTT_BROKER   = "homeassistant.local"   # or your HA IP address e.g. "192.168.1.100"
-MQTT_PORT     = 1883
-MQTT_USER     = "your_mqtt_username"
-MQTT_PASSWORD = "your_mqtt_password"
-MQTT_CLIENT_ID = "esp32_flow_sensor"
+MQTT_BROKER   = secrets.MQTT_BROKER
+MQTT_PORT     = secrets.MQTT_PORT
+MQTT_USER     = secrets.MQTT_USER
+MQTT_PASSWORD = secrets.MQTT_PASSWORD
+MQTT_CLIENT_ID = secrets.MQTT_CLIENT_ID
 
 # MQTT topics
 TOPIC_STATE        = b"home/flow_sensor/state"
@@ -169,6 +173,8 @@ def publish_discovery(client):
         ujson.dumps(keg_liters_config).encode(),
         retain=True
     )
+    client.publish(
+        b"homeassistant/sensor/flow_sensor/flow_rate/config",
         ujson.dumps(rate_config).encode(),
         retain=True
     )
