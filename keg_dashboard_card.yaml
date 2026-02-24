@@ -1,0 +1,78 @@
+type: vertical-stack
+cards:
+  # ── Keg Level Bar Card ──────────────────────────────────────────────────────
+  - type: custom:bar-card
+    entities:
+      - entity: sensor.keg_level
+        name: 🍺 Keg Level
+        icon: mdi:beer
+        color: >
+          {% set pct = states('sensor.keg_level') | float %}
+          {% if pct > 50 %}#f9a825
+          {% elif pct > 25 %}#ef6c00
+          {% else %}#c62828
+          {% endif %}
+    title: Draft Keg
+    height: 40
+    rounding: 8px
+    positions:
+      icon: outside
+      indicator: outside
+      name: inside
+      value: inside
+    severity:
+      - value: 25
+        color: "#c62828"
+      - value: 50
+        color: "#ef6c00"
+      - value: 100
+        color: "#f9a825"
+
+  # ── Stats Row ───────────────────────────────────────────────────────────────
+  - type: glance
+    show_name: true
+    show_icon: true
+    show_state: true
+    entities:
+      - entity: sensor.keg_level
+        name: Full
+        icon: mdi:percent
+      - entity: sensor.keg_remaining
+        name: Remaining
+        icon: mdi:beer-outline
+      - entity: sensor.water_flow_rate
+        name: Flow Rate
+        icon: mdi:water-pump
+
+  # ── Reset Button ─────────────────────────────────────────────────────────────
+  - type: button
+    name: 🔄 New Keg — Reset to Full
+    icon: mdi:restart
+    tap_action:
+      action: call-service
+      service: mqtt.publish
+      service_data:
+        topic: home/flow_sensor/reset
+        payload: reset
+    hold_action:
+      action: none
+    card_mod:
+      style: |
+        ha-card {
+          background: var(--primary-color);
+          color: white;
+          font-weight: bold;
+          border-radius: 12px;
+        }
+        ha-card:hover {
+          filter: brightness(1.1);
+        }
+
+  # ── Flow Rate History Graph ──────────────────────────────────────────────────
+  - type: history-graph
+    title: Flow Rate (last 24h)
+    hours_to_show: 24
+    refresh_interval: 30
+    entities:
+      - entity: sensor.water_flow_rate
+        name: L/min
