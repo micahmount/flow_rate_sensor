@@ -115,6 +115,26 @@ For full setup instructions on Linux and macOS, see the official Espressif docum
 
 This covers installing the ESP-IDF (Espressif IoT Development Framework), required dependencies, and configuring your environment for ESP32 development.
 
+### Connecting with minicom (Ubuntu 24.04)
+
+To connect to the ESP32 REPL over serial using minicom:
+
+```bash
+sudo apt install minicom
+sudo usermod -a -G dialout $USER
+```
+
+Log out and back in for the group change to take effect, then run:
+
+```bash
+minicom -D /dev/ttyUSB0 -b 115200
+```
+
+- **Device:** `/dev/ttyUSB0`
+- **Baudrate:** `115200`
+
+To exit minicom, press `Ctrl+A`, then `X`, then `Enter`.
+
 ---
 
 ## Flashing MicroPython to the ESP32
