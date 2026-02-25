@@ -61,40 +61,37 @@ Connect the sensor's wires to the ESP32 as follows:
 
 ## Home Assistant Setup
 
-Since you're running Home Assistant Container (without the Apps panel), you'll run Mosquitto as a separate Docker container.
+Since you're running Home Assistant Container (without the Apps panel), you'll run Mosquitto as a separate Docker container using docker-compose.
 
-### Step 1 — Run Mosquitto as a Docker Container
+### Step 1 — Set Up Mosquitto with Docker Compose
 
-MQTT is the messaging protocol the ESP32 uses to send data to Home Assistant. Run the Mosquitto broker in Docker with authentication:
+MQTT is the messaging protocol the ESP32 uses to send data to Home Assistant.
 
-First, create a password file for Mosquitto:
+1. Copy the `mosquitto` folder from this repository to your Docker host (e.g., `~/mosquitto`)
 
-```bash
-# Create a directory for the config
-mkdir -p ~/mosquitto/config
-
-# Generate password file (replace mqtt_esp32 with your desired username)
-docker run --rm -it eclipse-mosquitto:latest mosquitto_passwd -c ~/mosquitto/config/mosquitto.passwd mqtt_esp32
-```
-
-Create `~/mosquitto/config/mosquitto.conf`:
-
-```
-listener 1883
-allow_anonymous false
-password_file /mosquitto/config/mosquitto.passwd
-```
-
-Now run the container:
+2. Create directories and generate the password file:
 
 ```bash
-docker run -d \
-  --name mosquitto \
-  --restart unless-stopped \
-  -p 1883:1883 \
-  -v ~/mosquitto/config:/mosquitto/config \
-  eclipse-mosquitto:latest \
-  mosquitto -c /mosquitto/config/mosquitto.conf
+# Create directories
+mkdir -p ~/mosquitto/config ~/mosquitto/data ~/mosquitto/log
+
+# Generate password file
+docker run --rm -it -v ~/mosquitto/config:/mosquitto/config eclipse-mosquitto:latest mosquitto_passwd -c /mosquitto/config/mosquitto.passwd mqtt_esp32
+```
+
+Enter your desired password when prompted.
+
+3. Fix ownership (required for Mosquitto to write to log/data directories):
+
+```bash
+sudo chown -R 1883:1883 ~/mosquitto
+```
+
+4. Start Mosquitto:
+
+```bash
+cd ~/mosquitto
+docker-compose up -d
 ```
 
 ### Step 2 — Add the MQTT Integration to Home Assistant
@@ -213,14 +210,52 @@ To find your Home Assistant IP address, go to **Settings → System → Network*
 
 ### Step 2 — Upload the Files
 
-In Thonny:
+Using **mpremote** (recommended):
+
+```bash
+# Activate venv
+source ~/mpremote/bin/activate
+
+# Deploy flow_sensor.py as main.py
+mpremote connect /dev/ttyUSB0 fs cp flow_sensor.py :main.py
+
+# Copy secrets.py
+mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
+```
+
+Or using **Thonny**:
 
 1. Open `flow_sensor.py` and save it as `main.py` on the MicroPython device
 2. Open `secrets.py` and save it on the MicroPython device
 
-### Step 3 — Test It
+### Step 3 — (Optional) Enable WebREPL
 
-Press the **Reset** button on your ESP32 (or unplug and replug it). Watch the Thonny console — you should see:
+To enable wireless debugging, enable WebREPL once (run this command then follow the prompts):
+
+```bash
+mpremote connect /dev/ttyUSB0 repl
+```
+
+In the REPL, type:
+```python
+import webrepl_setup
+```
+
+Follow the prompts:
+- Would you like to enable WebREPL? → **E** to enable
+- Set a password (e.g., "esp32pw")
+
+After enabling, you can connect to `http://<esp32-ip>:8266/` from your browser.
+
+### Step 4 — Run It
+
+Reset the ESP32 to start the flow sensor:
+
+```bash
+mpremote connect /dev/ttyUSB0 reset
+```
+
+Or press the Reset button on the ESP32. Watch the output — you should see:
 
 ```
 Connecting to WiFi...
@@ -241,20 +276,38 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 
 ## Setting Up the Dashboard
 
-Add the sensors to your Home Assistant dashboard:
+### Option 1: With HACS (Recommended)
+
+If you have HACS installed, you can use the Bar Card for a nice visual gauge.
+
+1. **Install Bar Card via HACS:**
+   - Go to **HACS** in the sidebar
+   - Click **Explore & Download Repositories**
+   - Search for "Bar Card"
+   - Click **Download**
+
+2. **Restart Home Assistant** (or go to Developer Tools → YAML → Reload Frontend)
+
+3. **Add the dashboard card:**
+   - Go to **Settings** → **Dashboards**
+   - Click **Add Dashboard** → **Import YAML**
+   - Select `keg_dashboard_card.yaml`
+
+This dashboard includes:
+- A colored bar showing keg level (amber → orange → red as it empties)
+- Stats row with percentage, liters remaining, and flow rate
+- A reset button to start a new keg
+- 24-hour flow rate history graph
+
+### Option 2: Simple Dashboard (No HACS)
+
+If you don't have HACS, you can add individual entities to any dashboard:
 
 1. Go to your Home Assistant dashboard
-2. Click **Edit Dashboard** (three dots menu → Edit Dashboard)
-3. Click **Add Card**
-4. Search for and add an **Entities Card**
-5. Select these entities:
-   - `sensor.water_flow_rate` — current flow rate in L/min
-   - `sensor.water_total_volume` — all-time total volume in L
-   - `sensor.keg_level` — keg fullness as a percentage
-   - `sensor.keg_remaining` — liters left in the keg
-6. Click **Save**
+2. Search for each entity (`sensor.keg_level`, `sensor.keg_remaining`, etc.)
+3. Click the entity → three dots → **Add to Dashboard**
 
-You can also add individual **Sensor Cards** for each entity to customize the display.
+Or use an **Entities Card** to show multiple sensors together.
 
 ---
 
@@ -298,6 +351,9 @@ The sensor's calibration constant (23 Hz per L/min) is nominal. If you want high
 |---|---|
 | `flow_sensor.py` | Main ESP32 firmware — deploy as `main.py` on the device |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
+| `mosquitto/` | Docker Compose config for Mosquitto broker — copy to Docker host and run |
+| `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with Bar Card (requires HACS) |
+| `keg_dashboard.yaml` | Simple YAML dashboard without custom cards (fallback option) |
 
 ---
 

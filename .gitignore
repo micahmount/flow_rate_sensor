@@ -1,0 +1,7 @@
+# Secrets - do not commit
+secrets.py
+
+# Mosquitto Docker data - do not commit
+mosquitto/data/
+mosquitto/log/
+mosquitto/config/mosquitto.passwd

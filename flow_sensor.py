@@ -188,7 +188,7 @@ def publish_discovery(client):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish
+    global pulse_count, last_publish, keg_dispensed, total_pulses
 
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)

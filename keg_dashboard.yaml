@@ -1,0 +1,24 @@
+# Keg Monitor Dashboard
+# Add this to Home Assistant via Settings → Dashboards → Add Dashboard → YAML
+
+title: Keg Monitor
+path: keg-monitor
+icon: mdi:beer
+
+cards:
+  - type: gauge
+    entity: sensor.keg_level
+    min: 0
+    max: 100
+    unit: "%"
+    name: Keg Level
+
+  - type: entities
+    title: Keg Details
+    entities:
+      - entity: sensor.keg_remaining
+        name: Liters Remaining
+      - entity: sensor.water_flow_rate
+        name: Flow Rate
+      - entity: sensor.water_total_volume
+        name: Total Poured
