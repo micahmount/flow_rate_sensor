@@ -10,9 +10,14 @@
 import network
 import time
 import webrepl
-from machine import Pin, lightsleep, RTC
+from machine import Pin, lightsleep
 from umqtt.simple import MQTTClient
 import ujson
+import _thread
+try:
+    from ota_updater import start_update_server
+except:
+    print("OTA updater not available")
 try:
     import secrets
 except ImportError:
@@ -50,20 +55,16 @@ MIN_PULSE_MS      = 2       # minimum time between valid pulses (physical limit 
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
 
-rtc = RTC()  # For persisting data during light sleep
-if not hasattr(rtc, 'pulse_count'):
-    rtc.pulse_count = 0
-    rtc.total_pulses = 0
-    rtc.keg_dispensed = 0.0
-    rtc.last_publish = 0
-
-pulse_count     = rtc.pulse_count
-total_pulses    = rtc.total_pulses
-keg_dispensed   = rtc.keg_dispensed   # liters dispensed from current keg
-last_publish    = rtc.last_publish
+pulse_count     = 0
+total_pulses    = 0
+keg_dispensed   = 0.0
+last_publish    = 0
 last_pulse_time = 0
-prev_count      = 0     # previous pulse count to detect flow changes
-flow_detected   = False # Flag to wake from sleep on flow
+prev_count      = 0
+flow_detected   = False
+wlan            = None
+client          = None
+discovery_done  = False
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
@@ -89,8 +90,6 @@ def pulse_handler(pin):
     last_pulse_time = now
     pulse_count  += 1
     total_pulses += 1
-    rtc.pulse_count = pulse_count
-    rtc.total_pulses = total_pulses
     flow_detected = True  # Set flag to wake from sleep
 
 # ─── WiFi ─────────────────────────────────────────────────────────────────────
@@ -140,7 +139,6 @@ def mqtt_callback(topic, msg):
     global keg_dispensed
     if topic == TOPIC_RESET:
         keg_dispensed = 0.0
-        rtc.keg_dispensed = 0.0  # Persist the reset
         print("Keg reset to full (18.93 L)")
 
 def publish_discovery(client):
@@ -235,21 +233,28 @@ def publish_discovery(client):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count, wlan, client
+    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count, wlan, client, discovery_done, flow_detected
 
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
     sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
 
-    # Initialize WiFi and WebREPL
+    # Initialize WiFi, WebREPL, and OTA
     wlan = connect_wifi()
     if wlan is not None:
+        # Start WebREPL
         try:
-            # Start WebREPL using configuration from webrepl_setup
             webrepl.start()
             print(f"WebREPL started at ws://{wlan.ifconfig()[0]}:8266")
         except Exception as e:
             print("WebREPL error:", e)
+            
+        # Start OTA update server
+        try:
+            _thread.start_new_thread(start_update_server, ())
+            print(f"OTA update server started at http://{wlan.ifconfig()[0]}:8080")
+        except Exception as e:
+            print("Failed to start OTA server:", e)
 
     client = None
     discovery_done = False
@@ -292,9 +297,7 @@ def main():
                 # Snapshot and reset interval pulse count
                 count = pulse_count
                 pulse_count = 0
-                rtc.pulse_count = 0
                 last_publish = now
-                rtc.last_publish = now
                 prev_count = 0
 
                 # Flow rate: (pulses / elapsed_seconds) * 60 / PULSES_PER_LITER = L/min
@@ -308,7 +311,6 @@ def main():
                 # Track how much has been dispensed from this keg
                 liters_this_interval = round(count / PULSES_PER_LITER, 4)
                 keg_dispensed       += liters_this_interval
-                rtc.keg_dispensed    = keg_dispensed
                 total_volume         = round(total_pulses / PULSES_PER_LITER, 3)
 
                 keg_remaining = round(max(KEG_VOLUME_LITERS - keg_dispensed, 0), 3)
@@ -328,12 +330,15 @@ def main():
                     print("MQTT publish error:", e)
 
                 # Disconnect MQTT but keep WiFi for WebREPL
-                try:
-                    client.publish(TOPIC_AVAILABILITY, b"offline", retain=True)
-                    client.disconnect()
-                except Exception as e:
-                    print("MQTT disconnect error:", e)
-                client = None
+                if client is not None: # Only try to disconnect/publish if client is valid
+                    try:
+                        client.publish(TOPIC_AVAILABILITY, b"offline", retain=True)
+                        client.disconnect()
+                    except Exception as e:
+                        print("MQTT disconnect error:", e)
+                    client = None
+                else:
+                    print("Client was already None, skipping disconnect and offline publish.")
 
             # Use light sleep for power saving, wake on GPIO or timer
             if flow_detected:
