@@ -1,4 +1,5 @@
 # Gredia 1/4" Hall Effect Flow Sensor — ESP32 MicroPython
+# This is main.py - the primary script that runs on the ESP32 device
 # Publishes flow rate (L/min) and total volume (L) to Home Assistant via MQTT
 #
 # Wiring:
@@ -8,7 +9,8 @@
 
 import network
 import time
-from machine import Pin, lightsleep
+import webrepl
+from machine import Pin, lightsleep, RTC
 from umqtt.simple import MQTTClient
 import ujson
 try:
@@ -37,34 +39,65 @@ KEG_VOLUME_LITERS  = 18.93  # 5 US gallons
 
 # Sensor
 FLOW_PIN          = 4       # GPIO pin connected to yellow wire
-PULSES_PER_LITER  = 450      # pulses per liter (calibrate: 450 is common for these sensors)
+PULSES_PER_LITER  = 450     # pulses per liter (calibrate: 450 is common for these sensors)
 PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
 SLEEP_INTERVAL    = 5000    # ms to sleep between cycles (5 seconds)
-DEBOUNCE_MS       = 10      # debounce time in milliseconds
+DEBOUNCE_MS       = 50      # debounce time in milliseconds (increased to prevent false triggers)
+MAX_FLOW_RATE     = 30      # maximum possible flow rate in L/min (sanity check)
+MIN_PULSE_MS      = 2       # minimum time between valid pulses (physical limit of sensor)
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
 
-pulse_count     = 0
-total_pulses    = 0
-keg_dispensed   = 0.0   # liters dispensed from current keg
-last_publish    = 0
+rtc = RTC()  # For persisting data during light sleep
+if not hasattr(rtc, 'pulse_count'):
+    rtc.pulse_count = 0
+    rtc.total_pulses = 0
+    rtc.keg_dispensed = 0.0
+    rtc.last_publish = 0
+
+pulse_count     = rtc.pulse_count
+total_pulses    = rtc.total_pulses
+keg_dispensed   = rtc.keg_dispensed   # liters dispensed from current keg
+last_publish    = rtc.last_publish
 last_pulse_time = 0
 prev_count      = 0     # previous pulse count to detect flow changes
+flow_detected   = False # Flag to wake from sleep on flow
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
 def pulse_handler(pin):
-    global pulse_count, total_pulses, last_pulse_time
+    global pulse_count, total_pulses, last_pulse_time, flow_detected
     now = time.ticks_ms()
-    if time.ticks_diff(now, last_pulse_time) < DEBOUNCE_MS:
+    
+    # Validate timing between pulses
+    pulse_diff = time.ticks_diff(now, last_pulse_time)
+    if pulse_diff < MIN_PULSE_MS:  # Physically impossible, must be noise
         return
+    if pulse_diff < DEBOUNCE_MS:   # Within debounce window
+        return
+        
+    # Calculate instantaneous flow rate for validation
+    # flow = (1 pulse / time_diff_seconds) * (60 seconds/minute) * (1 liter/PULSES_PER_LITER)
+    inst_flow_rate = (1 / (pulse_diff / 1000)) * 60 / PULSES_PER_LITER
+    
+    # Reject physically impossible flow rates
+    if inst_flow_rate > MAX_FLOW_RATE:
+        return
+        
     last_pulse_time = now
     pulse_count  += 1
     total_pulses += 1
+    rtc.pulse_count = pulse_count
+    rtc.total_pulses = total_pulses
+    flow_detected = True  # Set flag to wake from sleep
 
 # ─── WiFi ─────────────────────────────────────────────────────────────────────
 
 def connect_wifi():
+    global wlan
+    if wlan is not None and wlan.isconnected():
+        return wlan
+        
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.config(pm=0)  # Disable power management to prevent modem sleep
@@ -105,6 +138,7 @@ def mqtt_callback(topic, msg):
     global keg_dispensed
     if topic == TOPIC_RESET:
         keg_dispensed = 0.0
+        rtc.keg_dispensed = 0.0  # Persist the reset
         print("Keg reset to full (18.93 L)")
 
 def publish_discovery(client):
@@ -199,21 +233,23 @@ def publish_discovery(client):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count
+    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count, wlan, client
 
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
     sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
 
-    last_publish = time.time()
-    last_pulse_time = time.ticks_ms()
-    client = None
-    wlan = None
+    # Initialize WiFi and WebREPL
+    wlan = connect_wifi()
+    if wlan is not None:
+        try:
+            webrepl.start()
+            print("WebREPL started")
+        except:
+            print("WebREPL already running")
 
-    last_publish = time.time()
-    last_pulse_time = time.ticks_ms()
     client = None
-    wlan = None
+    discovery_done = False
 
     while True:
         try:
@@ -232,37 +268,44 @@ def main():
                 # Connect WiFi
                 wlan = connect_wifi()
                 if wlan is None:
-                    lightsleep(5000)
+                    time.sleep(5)
                     continue
 
                 # Connect MQTT
                 try:
                     client = connect_mqtt()
-                    publish_discovery(client)
+                    if not discovery_done:
+                        publish_discovery(client)
+                        discovery_done = True
                 except Exception as e:
                     print("MQTT connection failed:", e)
                     client = None
-                    lightsleep(5000)
+                    time.sleep(5)
                     continue
 
                 # Check for reset command before publishing
-                try:
-                    client.check_msg()
-                except Exception:
-                    pass
+                client.check_msg()
 
                 # Snapshot and reset interval pulse count
                 count = pulse_count
                 pulse_count = 0
+                rtc.pulse_count = 0
                 last_publish = now
+                rtc.last_publish = now
                 prev_count = 0
 
                 # Flow rate: (pulses / elapsed_seconds) * 60 / PULSES_PER_LITER = L/min
-                flow_rate    = round((count / elapsed) * 60 / PULSES_PER_LITER, 3)
+                # Sanity check the elapsed time to prevent division by very small numbers
+                if elapsed < 0.1:  # Less than 100ms is too short for accurate measurement
+                    flow_rate = 0
+                else:
+                    flow_rate = round((count / elapsed) * 60 / PULSES_PER_LITER, 3)
+                    flow_rate = min(flow_rate, MAX_FLOW_RATE)  # Cap at physical maximum
 
                 # Track how much has been dispensed from this keg
                 liters_this_interval = round(count / PULSES_PER_LITER, 4)
                 keg_dispensed       += liters_this_interval
+                rtc.keg_dispensed    = keg_dispensed
                 total_volume         = round(total_pulses / PULSES_PER_LITER, 3)
 
                 keg_remaining = round(max(KEG_VOLUME_LITERS - keg_dispensed, 0), 3)
@@ -281,16 +324,23 @@ def main():
                 except Exception as e:
                     print("MQTT publish error:", e)
 
-                # Disconnect to save power
+                # Disconnect MQTT but keep WiFi for WebREPL
+                try:
+                    client.publish(TOPIC_AVAILABILITY, b"offline", retain=True)
+                    client.disconnect()
+                except Exception as e:
+                    print("MQTT disconnect error:", e)
                 client = None
-                wlan.active(False)
-                wlan = None
 
-            # Sleep - GPIO interrupts will wake
-            lightsleep(SLEEP_INTERVAL)
+            # Use light sleep for power saving, wake on GPIO or timer
+            if flow_detected:
+                flow_detected = False  # Reset flag
+                time.sleep(0.1)  # Brief sleep to allow more pulses
+            else:
+                lightsleep(SLEEP_INTERVAL)  # Wake on either GPIO interrupt or timer
             
         except Exception as e:
             print("Main loop error:", e)
-            lightsleep(5000)
+            time.sleep(5)
 
 main()

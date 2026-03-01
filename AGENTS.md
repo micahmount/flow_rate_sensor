@@ -6,7 +6,7 @@ This is a **MicroPython** project for an ESP32 microcontroller that reads a hall
 
 - **Language**: MicroPython (subset of Python 3 for embedded devices)
 - **Target Hardware**: ESP32
-- **Main File**: `flow_sensor.py` (deploy as `main.py` on device)
+- **Main File**: `main.py` (the default entry point for MicroPython devices)
 
 ---
 
@@ -26,7 +26,7 @@ esptool.py --port /dev/ttyUSB0 erase_flash
 # Flash MicroPython firmware
 esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash -z 0x1000 ESP32_GENERIC-*.bin
 
-# Deploy flow_sensor.py as main.py using Thonny
+# Deploy to ESP32 using Thonny
 # File → Save As → MicroPython device → main.py
 ```
 
@@ -147,7 +147,7 @@ except Exception:
 
 ### Adding New Features
 
-1. Edit `flow_sensor.py`
+1. Edit `main.py`
 2. Deploy to ESP32 using Thonny
 3. Monitor serial output
 4. Verify MQTT messages arrive in Home Assistant
@@ -160,7 +160,7 @@ except Exception:
 
 ### Configuration Required Before Deploy
 
-Edit these values in `flow_sensor.py`:
+Edit these values in `main.py`:
 
 ```python
 WIFI_SSID     = "your_wifi_ssid"
