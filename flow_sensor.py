@@ -37,20 +37,27 @@ KEG_VOLUME_LITERS  = 18.93  # 5 US gallons
 
 # Sensor
 FLOW_PIN          = 4       # GPIO pin connected to yellow wire
-PULSES_PER_LITER  = 23 * 60  # 23 pulses/sec per L/min → 1380 pulses per liter
+PULSES_PER_LITER  = 450      # pulses per liter (calibrate: 450 is common for these sensors)
 PUBLISH_INTERVAL  = 10      # seconds between MQTT publishes
+DEBOUNCE_MS       = 10      # debounce time in milliseconds
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
 
-pulse_count    = 0
-total_pulses   = 0
-keg_dispensed  = 0.0   # liters dispensed from current keg
-last_publish   = 0
+pulse_count     = 0
+total_pulses    = 0
+keg_dispensed   = 0.0   # liters dispensed from current keg
+last_publish    = 0
+last_pulse_time = 0
+last_ping       = 0
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
 def pulse_handler(pin):
-    global pulse_count, total_pulses
+    global pulse_count, total_pulses, last_pulse_time
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_pulse_time) < DEBOUNCE_MS:
+        return
+    last_pulse_time = now
     pulse_count  += 1
     total_pulses += 1
 
@@ -59,6 +66,7 @@ def pulse_handler(pin):
 def connect_wifi():
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
+    wlan.config(pm=0)  # Disable power management to prevent modem sleep
     if not wlan.isconnected():
         print("Connecting to WiFi...")
         wlan.connect(WIFI_SSID, WIFI_PASSWORD)
@@ -188,7 +196,7 @@ def publish_discovery(client):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish, keg_dispensed, total_pulses
+    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, last_ping
 
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
@@ -199,6 +207,8 @@ def main():
     publish_discovery(client)
 
     last_publish = time.time()
+    last_pulse_time = time.ticks_ms()
+    last_ping = time.time()
 
     while True:
         now = time.time()
@@ -210,14 +220,22 @@ def main():
         except Exception:
             pass
 
+        # Ping MQTT periodically to keep connection alive
+        if now - last_ping >= 30:
+            try:
+                client.ping()
+                last_ping = now
+            except Exception:
+                pass
+
         if elapsed >= PUBLISH_INTERVAL:
             # Snapshot and reset interval pulse count
             count = pulse_count
             pulse_count = 0
             last_publish = now
 
-            # Flow rate: (pulses / elapsed_seconds) / 23 = L/min
-            flow_rate    = round((count / elapsed) / 23, 3)
+            # Flow rate: (pulses / elapsed_seconds) * 60 / PULSES_PER_LITER = L/min
+            flow_rate    = round((count / elapsed) * 60 / PULSES_PER_LITER, 3)
 
             # Track how much has been dispensed from this keg
             liters_this_interval = round(count / PULSES_PER_LITER, 4)
