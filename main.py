@@ -10,6 +10,7 @@
 import network
 import time
 import webrepl
+import websocket_helper  # Required for WebREPL password
 from machine import Pin, lightsleep, RTC
 from umqtt.simple import MQTTClient
 import ujson
@@ -33,6 +34,9 @@ MQTT_CLIENT_ID = secrets.MQTT_CLIENT_ID
 TOPIC_STATE        = b"home/flow_sensor/state"
 TOPIC_AVAILABILITY = b"home/flow_sensor/availability"
 TOPIC_RESET        = b"home/flow_sensor/reset"   # publish any message here to reset keg to full
+
+# WebREPL
+WEBREPL_PASSWORD = secrets.WEBREPL_PASSWORD
 
 # Keg
 KEG_VOLUME_LITERS  = 18.93  # 5 US gallons
@@ -243,10 +247,12 @@ def main():
     wlan = connect_wifi()
     if wlan is not None:
         try:
-            webrepl.start()
-            print("WebREPL started")
-        except:
-            print("WebREPL already running")
+            # Configure and start WebREPL
+            websocket_helper.password(WEBREPL_PASSWORD)
+            webrepl.start(password=WEBREPL_PASSWORD)
+            print(f"WebREPL started at ws://{wlan.ifconfig()[0]}:8266")
+        except Exception as e:
+            print("WebREPL error:", e)
 
     client = None
     discovery_done = False
