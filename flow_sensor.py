@@ -8,7 +8,7 @@
 
 import network
 import time
-from machine import Pin
+from machine import Pin, lightsleep
 from umqtt.simple import MQTTClient
 import ujson
 try:
@@ -38,7 +38,8 @@ KEG_VOLUME_LITERS  = 18.93  # 5 US gallons
 # Sensor
 FLOW_PIN          = 4       # GPIO pin connected to yellow wire
 PULSES_PER_LITER  = 450      # pulses per liter (calibrate: 450 is common for these sensors)
-PUBLISH_INTERVAL  = 10      # seconds between MQTT publishes
+PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
+SLEEP_INTERVAL    = 5000    # ms to sleep between cycles (5 seconds)
 DEBOUNCE_MS       = 10      # debounce time in milliseconds
 
 # ─── Globals ──────────────────────────────────────────────────────────────────
@@ -48,7 +49,7 @@ total_pulses    = 0
 keg_dispensed   = 0.0   # liters dispensed from current keg
 last_publish    = 0
 last_pulse_time = 0
-last_ping       = 0
+prev_count      = 0     # previous pulse count to detect flow changes
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
@@ -76,8 +77,10 @@ def connect_wifi():
             time.sleep(1)
     if wlan.isconnected():
         print("WiFi connected:", wlan.ifconfig()[0])
+        return wlan
     else:
-        raise RuntimeError("WiFi connection failed")
+        print("WiFi connection failed, retrying...")
+        return None
 
 # ─── MQTT ─────────────────────────────────────────────────────────────────────
 
@@ -196,72 +199,98 @@ def publish_discovery(client):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, last_ping
+    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count
 
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
     sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
 
-    connect_wifi()
-    client = connect_mqtt()
-    publish_discovery(client)
+    last_publish = time.time()
+    last_pulse_time = time.ticks_ms()
+    client = None
+    wlan = None
 
     last_publish = time.time()
     last_pulse_time = time.ticks_ms()
-    last_ping = time.time()
+    client = None
+    wlan = None
 
     while True:
-        now = time.time()
-        elapsed = now - last_publish
-
-        # Check for incoming MQTT messages (e.g. reset command)
         try:
-            client.check_msg()
-        except Exception:
-            pass
+            now = time.time()
+            elapsed = now - last_publish
 
-        # Ping MQTT periodically to keep connection alive
-        if now - last_ping >= 30:
-            try:
-                client.ping()
-                last_ping = now
-            except Exception:
-                pass
+            # Check if there's flow happening
+            current_count = pulse_count
+            has_flow = current_count > prev_count
+            prev_count = current_count
 
-        if elapsed >= PUBLISH_INTERVAL:
-            # Snapshot and reset interval pulse count
-            count = pulse_count
-            pulse_count = 0
-            last_publish = now
+            # Publish if interval reached OR if flow just started
+            should_publish = elapsed >= PUBLISH_INTERVAL or (has_flow and elapsed >= 5)
 
-            # Flow rate: (pulses / elapsed_seconds) * 60 / PULSES_PER_LITER = L/min
-            flow_rate    = round((count / elapsed) * 60 / PULSES_PER_LITER, 3)
+            if should_publish:
+                # Connect WiFi
+                wlan = connect_wifi()
+                if wlan is None:
+                    lightsleep(5000)
+                    continue
 
-            # Track how much has been dispensed from this keg
-            liters_this_interval = round(count / PULSES_PER_LITER, 4)
-            keg_dispensed       += liters_this_interval
-            total_volume         = round(total_pulses / PULSES_PER_LITER, 3)
-
-            keg_remaining = round(max(KEG_VOLUME_LITERS - keg_dispensed, 0), 3)
-            keg_percent   = round((keg_remaining / KEG_VOLUME_LITERS) * 100, 1)
-
-            payload = ujson.dumps({
-                "flow_rate":     flow_rate,
-                "total_volume":  total_volume,
-                "keg_remaining": keg_remaining,
-                "keg_percent":   keg_percent
-            })
-
-            try:
-                client.publish(TOPIC_STATE, payload.encode())
-                print(f"Published → flow: {flow_rate} L/min | keg: {keg_remaining}L ({keg_percent}%)")
-            except Exception as e:
-                print("MQTT error, reconnecting...", e)
+                # Connect MQTT
                 try:
                     client = connect_mqtt()
-                except Exception as e2:
-                    print("Reconnect failed:", e2)
+                    publish_discovery(client)
+                except Exception as e:
+                    print("MQTT connection failed:", e)
+                    client = None
+                    lightsleep(5000)
+                    continue
 
-        time.sleep(0.1)
+                # Check for reset command before publishing
+                try:
+                    client.check_msg()
+                except Exception:
+                    pass
+
+                # Snapshot and reset interval pulse count
+                count = pulse_count
+                pulse_count = 0
+                last_publish = now
+                prev_count = 0
+
+                # Flow rate: (pulses / elapsed_seconds) * 60 / PULSES_PER_LITER = L/min
+                flow_rate    = round((count / elapsed) * 60 / PULSES_PER_LITER, 3)
+
+                # Track how much has been dispensed from this keg
+                liters_this_interval = round(count / PULSES_PER_LITER, 4)
+                keg_dispensed       += liters_this_interval
+                total_volume         = round(total_pulses / PULSES_PER_LITER, 3)
+
+                keg_remaining = round(max(KEG_VOLUME_LITERS - keg_dispensed, 0), 3)
+                keg_percent   = round((keg_remaining / KEG_VOLUME_LITERS) * 100, 1)
+
+                payload = ujson.dumps({
+                    "flow_rate":     flow_rate,
+                    "total_volume":  total_volume,
+                    "keg_remaining": keg_remaining,
+                    "keg_percent":   keg_percent
+                })
+
+                try:
+                    client.publish(TOPIC_STATE, payload.encode())
+                    print(f"Published → flow: {flow_rate} L/min | keg: {keg_remaining}L ({keg_percent}%)")
+                except Exception as e:
+                    print("MQTT publish error:", e)
+
+                # Disconnect to save power
+                client = None
+                wlan.active(False)
+                wlan = None
+
+            # Sleep - GPIO interrupts will wake
+            lightsleep(SLEEP_INTERVAL)
+            
+        except Exception as e:
+            print("Main loop error:", e)
+            lightsleep(5000)
 
 main()
