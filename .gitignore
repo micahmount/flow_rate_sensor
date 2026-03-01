@@ -5,3 +5,7 @@ secrets.py
 mosquitto/data/
 mosquitto/log/
 mosquitto/config/mosquitto.passwd
+
+# python virtual environments
+venv
+.venv
