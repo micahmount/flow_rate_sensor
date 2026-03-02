@@ -10,7 +10,7 @@
 import network
 import time
 import webrepl
-from machine import Pin
+from machine import Pin, lightsleep
 from umqtt.simple import MQTTClient
 import ujson
 import _thread
@@ -352,7 +352,7 @@ def main():
                 flow_detected = False  # Reset flag
                 time.sleep(0.1)  # Brief sleep to allow more pulses
             else:
-                time.sleep_ms(SLEEP_INTERVAL)  # Use sleep_ms instead of lightsleep for reliability
+                lightsleep(SLEEP_INTERVAL)  # Suspend CPU, wakes on GPIO interrupt or timer
             
         except Exception as e:
             print("Main loop error:", e)
