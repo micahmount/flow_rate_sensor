@@ -10,7 +10,7 @@
 import network
 import time
 import webrepl
-from machine import Pin, lightsleep
+from machine import Pin
 from umqtt.simple import MQTTClient
 import ujson
 import _thread
@@ -101,7 +101,7 @@ def connect_wifi():
         
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
-    wlan.config(pm=0)  # Disable power management to prevent modem sleep
+    wlan.config(pm=0)
     if not wlan.isconnected():
         print("Connecting to WiFi...")
         wlan.connect(WIFI_SSID, WIFI_PASSWORD)
@@ -330,22 +330,19 @@ def main():
                     print("MQTT publish error:", e)
 
                 # Disconnect MQTT but keep WiFi for WebREPL
-                if client is not None: # Only try to disconnect/publish if client is valid
+                if client is not None:
                     try:
-                        client.publish(TOPIC_AVAILABILITY, b"offline", retain=True)
                         client.disconnect()
                     except Exception as e:
                         print("MQTT disconnect error:", e)
                     client = None
-                else:
-                    print("Client was already None, skipping disconnect and offline publish.")
 
             # Use light sleep for power saving, wake on GPIO or timer
             if flow_detected:
                 flow_detected = False  # Reset flag
                 time.sleep(0.1)  # Brief sleep to allow more pulses
             else:
-                lightsleep(SLEEP_INTERVAL)  # Wake on either GPIO interrupt or timer
+                time.sleep_ms(SLEEP_INTERVAL)  # Use sleep_ms instead of lightsleep for reliability
             
         except Exception as e:
             print("Main loop error:", e)
