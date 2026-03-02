@@ -37,7 +37,8 @@ MQTT_CLIENT_ID = secrets.MQTT_CLIENT_ID
 # MQTT topics
 TOPIC_STATE        = b"home/flow_sensor/state"
 TOPIC_AVAILABILITY = b"home/flow_sensor/availability"
-TOPIC_RESET        = b"home/flow_sensor/reset"   # publish any message here to reset keg to full
+TOPIC_RESET        = b"home/flow_sensor/reset"
+TOPIC_WAKE         = b"home/flow_sensor/wake"
 
 # WebREPL configured via webrepl_setup
 
@@ -48,7 +49,8 @@ KEG_VOLUME_LITERS  = 18.93  # 5 US gallons
 FLOW_PIN          = 4       # GPIO pin connected to yellow wire
 PULSES_PER_LITER  = 450     # pulses per liter (calibrate: 450 is common for these sensors)
 PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
-SLEEP_INTERVAL    = 5000    # ms to sleep between cycles (5 seconds)
+SLEEP_INTERVAL    = 270000  # ms to sleep between cycles (4.5 minutes)
+WAKE_TIMEOUT_SECONDS = 300  # stay awake for 5 minutes after wake command
 DEBOUNCE_MS       = 50      # debounce time in milliseconds (increased to prevent false triggers)
 MAX_FLOW_RATE     = 30      # maximum possible flow rate in L/min (sanity check)
 MIN_PULSE_MS      = 2       # minimum time between valid pulses (physical limit of sensor)
@@ -65,6 +67,7 @@ flow_detected   = False
 wlan            = None
 client          = None
 discovery_done  = False
+wake_timeout    = 0
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
@@ -125,21 +128,25 @@ def connect_mqtt():
         port=MQTT_PORT,
         user=MQTT_USER,
         password=MQTT_PASSWORD,
-        keepalive=60
+        keepalive=300
     )
     client.set_last_will(TOPIC_AVAILABILITY, b"offline", retain=True)
     client.set_callback(mqtt_callback)
     client.connect()
     client.subscribe(TOPIC_RESET)
+    client.subscribe(TOPIC_WAKE)
     client.publish(TOPIC_AVAILABILITY, b"online", retain=True)
     print("MQTT connected")
     return client
 
 def mqtt_callback(topic, msg):
-    global keg_dispensed
+    global keg_dispensed, wake_timeout
     if topic == TOPIC_RESET:
         keg_dispensed = 0.0
         print("Keg reset to full (18.93 L)")
+    elif topic == TOPIC_WAKE:
+        wake_timeout = WAKE_TIMEOUT_SECONDS
+        print(f"Wake command received, staying awake for {WAKE_TIMEOUT_SECONDS}s")
 
 def publish_discovery(client):
     """
@@ -233,7 +240,7 @@ def publish_discovery(client):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count, wlan, client, discovery_done, flow_detected
+    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count, wlan, client, discovery_done, flow_detected, wake_timeout
 
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
@@ -337,8 +344,11 @@ def main():
                         print("MQTT disconnect error:", e)
                     client = None
 
-            # Use light sleep for power saving, wake on GPIO or timer
-            if flow_detected:
+            # Wake mode: stay awake if wake_timeout is active
+            if wake_timeout > 0:
+                time.sleep(1)
+                wake_timeout -= 1
+            elif flow_detected:
                 flow_detected = False  # Reset flag
                 time.sleep(0.1)  # Brief sleep to allow more pulses
             else:

@@ -177,3 +177,45 @@ MQTT_PASSWORD = "your_password"
 - [MicroPython ESP32 documentation](https://docs.micropython.org/en/latest/esp32/)
 - [ESP-IDF setup](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/)
 - [Home Assistant MQTT integration](https://www.home-assistant.io/integrations/mqtt/)
+
+---
+
+## Home Assistant Configuration
+
+### MQTT Button (Wake Device)
+
+To enable WebREPL access, add an MQTT Button to Home Assistant. This lets you wake the device from sleep mode.
+
+**Option 1: Using configuration.yaml**
+
+Add to your `configuration.yaml`:
+
+```yaml
+mqtt:
+  button:
+    - name: "Flow Sensor Wake"
+      command_topic: "home/flow_sensor/wake"
+      payload_press: "WAKE"
+```
+
+Then restart Home Assistant.
+
+**Option 2: Using MQTT Auto-Discovery**
+
+Publish this to `homeassistant/button/flow_sensor_wake/config` (retain=True):
+
+```json
+{
+  "name": "Flow Sensor Wake",
+  "unique_id": "flow_sensor_wake_button",
+  "command_topic": "home/flow_sensor/wake",
+  "payload_press": "WAKE"
+}
+```
+
+### Using the Wake Button
+
+1. Click the button in Home Assistant to send a wake command
+2. Wait ~5 seconds for the device to connect
+3. Access WebREPL at `ws://<device_ip>:8266`
+4. The device stays awake for 5 minutes, then returns to sleep mode
