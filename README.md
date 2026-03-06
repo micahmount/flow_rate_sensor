@@ -29,7 +29,7 @@ A complete DIY keg level monitor using a hall effect flow sensor, an ESP32, Micr
 | Home Assistant instance | Running on a Raspberry Pi, NUC, VM, etc. |
 | USB cable | For flashing the ESP32 |
 
-> **Note on keg size:** This guide is configured for a **5 US gallon corny keg (18.93 L)**. If you use a different size, update the `KEG_VOLUME_LITERS` constant in `flow_sensor.py`.
+> **Note on keg size:** This guide is configured for a **5 US gallon corny keg (18.93 L)**. If you use a different size, update the `KEG_VOLUME_LITERS` constant in `main.py`.
 
 ---
 
@@ -39,7 +39,7 @@ The flow sensor contains a small plastic rotor with a magnet. As beer flows thro
 
 > **Flow rate (L/min) = pulse frequency (Hz) ÷ 23**
 
-Every 10 seconds, the ESP32 publishes the current flow rate, total volume dispensed from the keg, liters remaining, and keg percentage to Home Assistant over MQTT. Home Assistant auto-discovers these as sensor entities — no manual configuration required.
+Every 30 seconds (or on flow detection), the ESP32 wakes up, publishes the current flow rate, total volume dispensed from the keg, liters remaining, and keg percentage to Home Assistant over MQTT, then enters lightsleep to conserve battery. Home Assistant auto-discovers these as sensor entities — no manual configuration required.
 
 ---
 
@@ -216,8 +216,8 @@ Using **mpremote** (recommended):
 # Activate venv
 source ~/mpremote/bin/activate
 
-# Deploy flow_sensor.py as main.py
-mpremote connect /dev/ttyUSB0 fs cp flow_sensor.py :main.py
+# Deploy main.py
+mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
 
 # Copy secrets.py
 mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
@@ -225,8 +225,8 @@ mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
 
 Or using **Thonny**:
 
-1. Open `flow_sensor.py` and save it as `main.py` on the MicroPython device
-2. Open `secrets.py` and save it on the MicroPython device
+1. Open `main.py` and save it on the MicroPython device
+2. Open `secrets.py` and save it on the device
 
 ### Step 3 — (Optional) Enable WebREPL
 
@@ -263,6 +263,7 @@ WiFi connected: 192.168.1.XXX
 MQTT connected
 Auto-discovery published to Home Assistant
 Published → flow: 0.0 L/min | keg: 18.93L (100.0%)
+Entering lightsleep for 270000ms...
 ```
 
 In Home Assistant, go to **Settings → Devices & Services → MQTT** and you should see a new device called **Water Flow Sensor** with four entities:
@@ -323,6 +324,53 @@ home/flow_sensor/reset
 
 ---
 
+## Waking the Device for WebREPL Access
+
+The ESP32 spends most of its time in lightsleep to conserve battery. To access WebREPL or make code changes:
+
+### Option 1: MQTT Wake Button (Recommended)
+
+Add an MQTT Button to Home Assistant to wake the device:
+
+```yaml
+# configuration.yaml
+mqtt:
+  button:
+    - name: "Flow Sensor Wake"
+      command_topic: "home/flow_sensor/wake"
+      payload_press: "WAKE"
+```
+
+Restart Home Assistant, then click the button to wake the device. It will stay awake for 5 minutes, giving you time to connect to WebREPL at `ws://<esp32-ip>:8266`.
+
+### Option 2: Wait for Next Wake Cycle
+
+The device wakes every 4.5 minutes to publish data. During this window, you can connect to WebREPL.
+
+---
+
+## Battery Optimization
+
+The ESP32 uses **lightsleep** mode to achieve long battery life:
+
+- **Active:** ~150-250mA (WiFi + MQTT publishing, ~2 seconds per cycle)
+- **Sleep:** ~1mA (lightsleep with CPU suspended)
+
+On a 10,000 mAh battery bank, expect **~3 months** of operation under normal use.
+
+### Configuration
+
+Key settings in `main.py`:
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes |
+| `SLEEP_INTERVAL` | 270000ms | Lightsleep duration (4.5 minutes) |
+| `WAKE_TIMEOUT_SECONDS` | 300 | Time to stay awake after wake command (5 min) |
+| `PULSES_PER_LITER` | 450 | Sensor calibration (pulses per liter) |
+
+---
+
 ## Troubleshooting
 
 **ESP32 won't connect to WiFi**
@@ -341,7 +389,7 @@ Check your wiring — particularly the yellow signal wire on GPIO 4. Make sure t
 This can happen if the keg was tapped when already partially empty and then reset at that point rather than when full. Just hit the Reset button when you put on a known-full keg going forward.
 
 **Readings seem inaccurate**
-The sensor's calibration constant (23 Hz per L/min) is nominal. If you want higher accuracy, you can calibrate it yourself by pouring a known volume (e.g. exactly 1 liter into a measuring jug) and adjusting the `PULSES_PER_LITER` constant in `flow_sensor.py` based on the actual pulse count observed.
+The sensor's calibration constant (450 pulses per liter) is nominal. If you want higher accuracy, you can calibrate it yourself by pouring a known volume (e.g. exactly 1 liter into a measuring jug) and adjusting the `PULSES_PER_LITER` constant in `main.py` based on the actual pulse count observed.
 
 ---
 
@@ -349,7 +397,8 @@ The sensor's calibration constant (23 Hz per L/min) is nominal. If you want high
 
 | File | Description |
 |---|---|
-| `flow_sensor.py` | Main ESP32 firmware — deploy as `main.py` on the device |
+| `main.py` | Main ESP32 firmware — deploy as `main.py` on the device |
+| `ota_updater.py` | OTA update server for wireless firmware updates |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
 | `mosquitto/` | Docker Compose config for Mosquitto broker — copy to Docker host and run |
 | `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with Bar Card (requires HACS) |
