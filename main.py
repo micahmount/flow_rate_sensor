@@ -10,18 +10,19 @@
 import network
 import time
 import webrepl
+import esp32
 from machine import Pin, lightsleep
 from umqtt.simple import MQTTClient
 import ujson
 import _thread
 try:
-    from ota_updater import start_update_server
-except:
-    print("OTA updater not available")
-try:
     import secrets
 except ImportError:
     raise ImportError("secrets.py not found. Copy secrets.py.example to secrets.py and configure.")
+try:
+    from ota_updater import start_update_server
+except:
+    print("OTA updater not available")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ def connect_mqtt():
         port=MQTT_PORT,
         user=MQTT_USER,
         password=MQTT_PASSWORD,
-        keepalive=300
+        keepalive=60
     )
     client.set_last_will(TOPIC_AVAILABILITY, b"offline", retain=True)
     client.set_callback(mqtt_callback)
@@ -162,7 +163,7 @@ def publish_discovery(client):
 
     # Flow rate sensor
     rate_config = {
-        "name": "Water Flow Rate",
+        "name": "Flow Rate",
         "unique_id": "flow_sensor_rate",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
@@ -176,7 +177,7 @@ def publish_discovery(client):
 
     # Total volume sensor
     volume_config = {
-        "name": "Water Total Volume",
+        "name": "Total Volume",
         "unique_id": "flow_sensor_volume",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
@@ -245,6 +246,9 @@ def main():
     # Set up sensor pin with interrupt
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
     sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
+    
+    # Configure GPIO wake from lightsleep - wake on LOW (sensor pulls low when active)
+    esp32.wake_on_ext0(pin=sensor_pin, level=esp32.WAKEUP_ALL_LOW)
 
     # Initialize WiFi, WebREPL, and OTA
     wlan = connect_wifi()
@@ -265,6 +269,10 @@ def main():
 
     client = None
     discovery_done = False
+    
+    # Initialize last_publish to ensure first loop publishes
+    if last_publish == 0:
+        last_publish = time.time() - PUBLISH_INTERVAL
 
     while True:
         try:
@@ -278,8 +286,9 @@ def main():
 
             # Publish if interval reached OR if flow just started
             should_publish = elapsed >= PUBLISH_INTERVAL or (has_flow and elapsed >= 5)
-
+            
             if should_publish:
+                print(f"Attempting publish... elapsed={elapsed:.1f}s, has_flow={has_flow}")
                 # Connect WiFi
                 wlan = connect_wifi()
                 if wlan is None:
@@ -350,8 +359,13 @@ def main():
                 wake_timeout -= 1
             elif flow_detected:
                 flow_detected = False  # Reset flag
-                time.sleep(0.1)  # Brief sleep to allow more pulses
+                # Immediately loop to check should_publish (don't sleep)
             else:
+                # Disconnect WiFi before lightsleep (required per ESP-IDF docs)
+                if wlan is not None and wlan.isconnected():
+                    wlan.disconnect()
+                    wlan.active(False)
+                print(f"Entering lightsleep for {SLEEP_INTERVAL}ms...")
                 lightsleep(SLEEP_INTERVAL)  # Suspend CPU, wakes on GPIO interrupt or timer
             
         except Exception as e:
