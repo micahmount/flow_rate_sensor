@@ -2,6 +2,8 @@
 
 A complete DIY keg level monitor using a hall effect flow sensor, an ESP32, MicroPython, and Home Assistant. Tracks how much beer has been poured in real time and displays the remaining volume and percentage on a live dashboard.
 
+**Tested with:** Home Assistant Core 2026.2.3 / Frontend 20260128.6
+
 ---
 
 ## Table of Contents
@@ -15,6 +17,21 @@ A complete DIY keg level monitor using a hall effect flow sensor, an ESP32, Micr
 7. [Setting Up the Dashboard](#setting-up-the-dashboard)
 8. [Resetting for a New Keg](#resetting-for-a-new-keg)
 9. [Troubleshooting](#troubleshooting)
+
+---
+
+## What Gets Reported to Home Assistant
+
+The ESP32 automatically publishes the following data to Home Assistant via MQTT:
+
+| Entity | MQTT Topic | Description |
+|--------|------------|-------------|
+| Flow Rate | `home/flow_sensor/flow_rate` | Current flow rate in L/min |
+| Total Volume | `home/flow_sensor/total_volume` | Total beer dispensed from the keg (L) |
+| Keg Level | `home/flow_sensor/keg_level` | Keg fullness as a percentage (0-100%) |
+| Keg Remaining | `home/flow_sensor/keg_remaining` | Liters remaining in the keg |
+
+Home Assistant auto-discovers these as sensor entities automatically — no manual configuration required.
 
 ---
 
@@ -138,23 +155,9 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash -z 0x1000 
 
 Replace `ESP32_GENERIC-*.bin` with the actual filename you downloaded.
 
-### Step 5 — Install Thonny
+### Step 5 — Verify umqtt is Available
 
-Download from [thonny.org](https://thonny.org) and install it. Thonny is the easiest way to connect to the ESP32 and transfer files.
-
-### Step 6 — Connect to the ESP32
-
-1. Open Thonny
-2. Go to **Tools → Options → Interpreter**
-3. Select **MicroPython (ESP32)** from the dropdown
-4. Select the correct COM port
-5. Click **OK**
-
-You should see a MicroPython REPL prompt (`>>>`) at the bottom of the Thonny window.
-
-### Step 7 — Verify umqtt is Available
-
-In the REPL, type:
+In the REPL (using mpremote or minicom), type:
 
 ```python
 import umqtt.simple
@@ -210,23 +213,15 @@ To find your Home Assistant IP address, go to **Settings → System → Network*
 
 ### Step 2 — Upload the Files
 
-Using **mpremote** (recommended):
+Using **mpremote**:
 
 ```bash
-# Activate venv
-source ~/mpremote/bin/activate
-
 # Deploy main.py
 mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
 
 # Copy secrets.py
 mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
 ```
-
-Or using **Thonny**:
-
-1. Open `main.py` and save it on the MicroPython device
-2. Open `secrets.py` and save it on the device
 
 ### Step 3 — (Optional) Enable WebREPL
 
@@ -275,40 +270,113 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 
 ---
 
+## Over-the-Air (OTA) Updates
+
+The ESP32 runs an OTA update server that allows you to update `main.py` wirelessly without connecting via USB.
+
+**Requirements:**
+- Device must be awake (use MQTT wake button or wait for a publish cycle)
+- You must know the device's IP address
+
+**To update firmware:**
+
+1. **Wake the device** using the MQTT wake button in Home Assistant (or wait for it to wake naturally)
+
+2. **Navigate to the OTA server** in your browser:
+   ```
+   http://<esp32-ip>:8080
+   ```
+   
+   For example: `http://192.168.1.100:8080`
+
+3. **Upload the new `main.py`** using the web form
+
+4. The device will automatically reboot with the new firmware
+
+**Note:** The OTA server only runs when the device is awake. If you can't connect, send a wake command first.
+
+---
+
 ## Setting Up the Dashboard
 
-### Option 1: With HACS (Recommended)
+### Option 1: Using the UI (Recommended)
 
-If you have HACS installed, you can use the Bar Card for a nice visual gauge.
+The easiest way to create a dashboard is using Home Assistant's built-in UI:
 
-1. **Install Bar Card via HACS:**
-   - Go to **HACS** in the sidebar
-   - Click **Explore & Download Repositories**
-   - Search for "Bar Card"
-   - Click **Download**
+1. Go to **Settings** → **Dashboards**
+2. Click **Add Dashboard**
+3. Choose **Sections** view (recommended) or **Masonry**
+4. Click **Add Card** and add the following cards:
 
-2. **Restart Home Assistant** (or go to Developer Tools → YAML → Reload Frontend)
+**Card 1 - Keg Level Gauge:**
+- Card type: **Gauge**
+- Entity: `sensor.keg_level`
+- Min: 0, Max: 100
+- Unit: `%`
+- Color: Amber (or use theme colors)
 
-3. **Add the dashboard card:**
-   - Go to **Settings** → **Dashboards**
-   - Click **Add Dashboard** → **Import YAML**
-   - Select `keg_dashboard_card.yaml`
+**Card 2 - Flow Stats:**
+- Card type: **Entities** (or **Statistic** card if available)
+- Add entities:
+  - `sensor.keg_remaining` (liters left)
+  - `sensor.flow_rate` (L/min)
+  - `sensor.total_volume` (total dispensed)
 
-This dashboard includes:
-- A colored bar showing keg level (amber → orange → red as it empties)
-- Stats row with percentage, liters remaining, and flow rate
-- A reset button to start a new keg
-- 24-hour flow rate history graph
+**Card 3 - Reset Button:**
+- Card type: **Button**
+- Entity: Create a helper (Settings → Devices & Services → Helpers → Button) with MQTT action
+- Or use an **MQTT Button** (see configuration below)
 
-### Option 2: Simple Dashboard (No HACS)
+### Option 2: Using YAML (Advanced)
 
-If you don't have HACS, you can add individual entities to any dashboard:
+If you prefer YAML mode dashboards:
 
-1. Go to your Home Assistant dashboard
-2. Search for each entity (`sensor.keg_level`, `sensor.keg_remaining`, etc.)
-3. Click the entity → three dots → **Add to Dashboard**
+```yaml
+# configuration.yaml
+mqtt:
+  button:
+    - name: "Reset Keg"
+      command_topic: "home/flow_sensor/reset"
+      payload_press: "RESET"
+```
 
-Or use an **Entities Card** to show multiple sensors together.
+Then add a YAML dashboard:
+
+```yaml
+# dashboards/keg.yaml
+title: Keg Monitor
+views:
+  - title: Keg
+    cards:
+      - type: gauge
+        entity: sensor.keg_level
+        min: 0
+        max: 100
+        unit: '%'
+      - type: entities
+        entities:
+          - entity: sensor.keg_remaining
+            name: Remaining
+          - entity: sensor.flow_rate
+            name: Flow Rate
+          - entity: sensor.total_volume
+            name: Total Volume
+```
+
+### Reset Button via MQTT
+
+To add a reset button that appears in HA:
+
+```yaml
+# configuration.yaml
+mqtt:
+  button:
+    - name: "Reset Keg"
+      command_topic: "home/flow_sensor/reset"
+      payload_press: "RESET"
+```
+
+After adding to configuration.yaml, restart Home Assistant.
 
 ---
 
@@ -342,6 +410,24 @@ mqtt:
 ```
 
 Restart Home Assistant, then click the button to wake the device. It will stay awake for 5 minutes, giving you time to connect to WebREPL at `ws://<esp32-ip>:8266`.
+
+### MQTT Reset Button
+
+To add a reset button in Home Assistant:
+
+```yaml
+# configuration.yaml
+mqtt:
+  button:
+    - name: "Flow Sensor Wake"
+      command_topic: "home/flow_sensor/wake"
+      payload_press: "WAKE"
+    - name: "Reset Keg"
+      command_topic: "home/flow_sensor/reset"
+      payload_press: "RESET"
+```
+
+Restart Home Assistant after adding these buttons.
 
 ### Option 2: Wait for Next Wake Cycle
 

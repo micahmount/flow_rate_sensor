@@ -164,7 +164,7 @@ def publish_discovery(client):
     # Flow rate sensor
     rate_config = {
         "name": "Flow Rate",
-        "unique_id": "flow_sensor_rate",
+        "unique_id": "water_flow_rate",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
         "value_template": "{{ value_json.flow_rate }}",
@@ -172,13 +172,14 @@ def publish_discovery(client):
         "device_class": "volume_flow_rate",
         "state_class": "measurement",
         "icon": "mdi:water-pump",
+        "force_update": True,
         "device": device
     }
 
     # Total volume sensor
     volume_config = {
         "name": "Total Volume",
-        "unique_id": "flow_sensor_volume",
+        "unique_id": "water_total_volume",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
         "value_template": "{{ value_json.total_volume }}",
@@ -186,26 +187,28 @@ def publish_discovery(client):
         "device_class": "water",
         "state_class": "total_increasing",
         "icon": "mdi:water",
+        "force_update": True,
         "device": device
     }
 
     # Keg level sensor
     keg_config = {
         "name": "Keg Level",
-        "unique_id": "flow_sensor_keg_level",
+        "unique_id": "keg_level",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
         "value_template": "{{ value_json.keg_percent }}",
         "unit_of_measurement": "%",
         "state_class": "measurement",
         "icon": "mdi:beer",
+        "force_update": True,
         "device": device
     }
 
     # Keg remaining (liters)
     keg_liters_config = {
         "name": "Keg Remaining",
-        "unique_id": "flow_sensor_keg_remaining",
+        "unique_id": "keg_remaining",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
         "value_template": "{{ value_json.keg_remaining }}",
@@ -213,6 +216,7 @@ def publish_discovery(client):
         "device_class": "water",
         "state_class": "measurement",
         "icon": "mdi:beer-outline",
+        "force_update": True,
         "device": device
     }
 

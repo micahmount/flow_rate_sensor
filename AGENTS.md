@@ -14,7 +14,23 @@ This is a **MicroPython** project for an ESP32 microcontroller that reads a hall
 
 ### Deploying to ESP32
 
-This project uses **Thonny** or **esptool** for deployment:
+This project uses **mpremote** for deployment:
+
+```bash
+# Install mpremote
+pip install mpremote
+
+# Deploy main.py
+mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
+
+# Copy secrets.py
+mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
+
+# Reset the device
+mpremote connect /dev/ttyUSB0 reset
+```
+
+Or use **esptool** to flash firmware:
 
 ```bash
 # Install esptool
@@ -25,16 +41,16 @@ esptool.py --port /dev/ttyUSB0 erase_flash
 
 # Flash MicroPython firmware
 esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash -z 0x1000 ESP32_GENERIC-*.bin
-
-# Deploy to ESP32 using Thonny
-# File → Save As → MicroPython device → main.py
 ```
 
 ### Testing / REPL
 
-Connect to the ESP32 REPL via Thonny or minicom:
+Connect to the ESP32 REPL via mpremote or minicom:
 
 ```bash
+# Using mpremote
+mpremote connect /dev/ttyUSB0 repl
+
 # Using minicom (Ubuntu)
 minicom -D /dev/ttyUSB0 -b 115200
 # Exit: Ctrl+A, then X, then Enter
@@ -148,7 +164,7 @@ except Exception:
 ### Adding New Features
 
 1. Edit `main.py`
-2. Deploy to ESP32 using Thonny
+2. Deploy to ESP32 using mpremote
 3. Monitor serial output
 4. Verify MQTT messages arrive in Home Assistant
 
