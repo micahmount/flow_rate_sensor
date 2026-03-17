@@ -1,5 +1,6 @@
 # Secrets - do not commit
 secrets.py
+secrets.yaml
 
 # Mosquitto Docker data - do not commit
 mosquitto/data/

@@ -1,0 +1,262 @@
+# flow_sensor.yaml — ESPHome config for Gredia 1/4" Hall Effect Flow Sensor
+#
+# Wiring:
+#   Red    → 3.3V or 5V
+#   Black  → GND
+#   Yellow → GPIO4
+#
+# Replaces main.py (MicroPython) with native ESPHome firmware.
+# Publishes to Home Assistant via MQTT (required for deep sleep battery operation).
+
+# ─── Substitutions ────────────────────────────────────────────────────────────
+
+substitutions:
+  device_name: flow-sensor
+  friendly_name: Water Flow Sensor
+
+  # Sensor calibration
+  pulses_per_liter: "450"   # pulses per liter — adjust for your sensor
+  keg_volume_liters: "18.93"  # 5 US gallons (corny keg)
+
+  # GPIO
+  flow_pin: GPIO4
+
+# ─── Core ─────────────────────────────────────────────────────────────────────
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+
+logger:
+  level: INFO
+
+# ─── API (disabled — using MQTT + deep_sleep instead) ────────────────────────
+# The dashboard requires an api: block to adopt the device. It won't maintain
+# a persistent connection while deep_sleep is active; that's expected.
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+# ─── OTA ──────────────────────────────────────────────────────────────────────
+# OTA still works — flash while the device is awake (first 30s after boot,
+# or trigger a wake via the MQTT wake topic before flashing).
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# ─── MQTT ─────────────────────────────────────────────────────────────────────
+# Using MQTT instead of the native API so the device can use deep_sleep.
+# The native API requires a persistent TCP connection which deep_sleep breaks.
+
+mqtt:
+  broker: !secret mqtt_broker       # e.g. 192.168.1.237
+  port: !secret mqtt_port           # e.g. 1883
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  client_id: esp32_flow_sensor
+
+  # Last Will — marks device offline if it drops unexpectedly (matches MicroPython LWT)
+  birth_message:
+    topic: home/flow_sensor/availability
+    payload: online
+    retain: true
+  will_message:
+    topic: home/flow_sensor/availability
+    payload: offline
+    retain: true
+  shutdown_message:
+    topic: home/flow_sensor/availability
+    payload: offline
+    retain: true
+
+  # Keg reset command — matches TOPIC_RESET in MicroPython
+  on_message:
+    - topic: home/flow_sensor/reset
+      then:
+        - lambda: |-
+            float total = id(total_volume_raw).state;
+            if (!isnan(total)) {
+              id(keg_reset_baseline) = total;
+              id(keg_dispensed) = 0.0f;
+            }
+            ESP_LOGI("keg", "Keg reset to full");
+
+  # ESPHome publishes HA MQTT auto-discovery messages for all entities automatically.
+  discovery: true
+
+# ─── WiFi ─────────────────────────────────────────────────────────────────────
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none   # disable WiFi power save for faster connect on wake
+
+# ─── Time ─────────────────────────────────────────────────────────────────────
+
+time:
+  - platform: sntp
+    id: ha_time
+
+# ─── Globals ──────────────────────────────────────────────────────────────────
+
+globals:
+  # Tracks total volume dispensed from the current keg (reset via button)
+  - id: keg_dispensed
+    type: float
+    restore_value: true   # survives reboots — same as MicroPython accumulation
+    initial_value: "0.0"
+
+  # Baseline total_volume at the time of the last keg reset.
+  # keg_dispensed = total_volume_raw − keg_reset_baseline
+  - id: keg_reset_baseline
+    type: float
+    restore_value: true
+    initial_value: "0.0"
+
+# ─── Pulse Meter (flow sensor) ────────────────────────────────────────────────
+
+sensor:
+  # pulse_meter handles pulse counting, debounce, and flow rate calculation.
+  # filter_out rejects pulses faster than MIN_PULSE_MS (2ms → 500 Hz max).
+  # internal_filter debounces within DEBOUNCE_MS (50ms).
+  - platform: pulse_meter
+    id: flow_sensor_raw
+    name: "Flow Rate"
+    pin:
+      number: ${flow_pin}
+      allow_other_uses: true
+      mode:
+        input: true
+        pullup: true    # matches Pin.PULL_UP
+    unit_of_measurement: "L/min"
+    icon: mdi:water-pump
+    device_class: volume_flow_rate
+    state_class: measurement
+    accuracy_decimals: 3
+    timeout: 2min       # report 0 L/min if no pulses for 2 minutes
+
+    # Debounce: reject pulses within 50ms of the previous (DEBOUNCE_MS = 50)
+    internal_filter: 50ms
+    # Also reject sub-2ms pulses (MIN_PULSE_MS = 2) — filter_out not available
+    # in pulse_meter; the internal_filter covers this since 50ms > 2ms.
+
+    filters:
+      # Convert pulse frequency (pulses/min) → L/min
+      - lambda: return x / ${pulses_per_liter};
+      # Sanity cap: MAX_FLOW_RATE = 30 L/min
+      - clamp:
+          min_value: 0.0
+          max_value: 30.0
+
+    # total_pulses counter — used to derive total_volume and keg tracking
+    total:
+      id: total_volume_raw
+      name: "Total Volume"
+      unit_of_measurement: "L"
+      icon: mdi:water
+      device_class: water
+      state_class: total_increasing
+      accuracy_decimals: 3
+      filters:
+        - lambda: return x / ${pulses_per_liter};
+
+  # Keg remaining (L) — derived from keg_dispensed global
+  - platform: template
+    id: keg_remaining_sensor
+    name: "Keg Remaining"
+    unit_of_measurement: "L"
+    icon: mdi:beer-outline
+    device_class: water
+    state_class: measurement
+    accuracy_decimals: 3
+    lambda: |-
+      float remaining = ${keg_volume_liters} - id(keg_dispensed);
+      if (remaining < 0.0f) remaining = 0.0f;
+      return remaining;
+    update_interval: 30s
+
+  # Keg level (%) — derived from keg_dispensed global
+  - platform: template
+    id: keg_level_sensor
+    name: "Keg Level"
+    unit_of_measurement: "%"
+    icon: mdi:beer
+    state_class: measurement
+    accuracy_decimals: 1
+    lambda: |-
+      float remaining = ${keg_volume_liters} - id(keg_dispensed);
+      if (remaining < 0.0f) remaining = 0.0f;
+      return (remaining / ${keg_volume_liters}) * 100.0f;
+    update_interval: 30s
+
+# ─── Accumulate keg_dispensed on each pulse_meter update ─────────────────────
+# ESPHome doesn't have a direct "delta since last publish" like the MicroPython
+# code. Instead we track the previous total_volume and compute the delta.
+
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          // Update keg_dispensed from total_volume_raw sensor
+          // total_volume_raw already accumulates all pulses / PULSES_PER_LITER
+          // We store it as keg_dispensed when reset; use a secondary global
+          // to track the volume at the time of the last keg reset.
+          // See keg_reset_baseline global below.
+          float total = id(total_volume_raw).state;
+          if (!isnan(total)) {
+            float baseline = id(keg_reset_baseline);
+            id(keg_dispensed) = total - baseline;
+            if (id(keg_dispensed) < 0.0f) id(keg_dispensed) = 0.0f;
+          }
+
+# ─── Keg Reset Button ─────────────────────────────────────────────────────────
+
+button:
+  - platform: template
+    name: "Reset Keg"
+    icon: mdi:refresh
+    on_press:
+      - lambda: |-
+          float total = id(total_volume_raw).state;
+          if (!isnan(total)) {
+            id(keg_reset_baseline) = total;
+            id(keg_dispensed) = 0.0f;
+          }
+          ESP_LOGI("keg", "Keg reset to full (${keg_volume_liters} L)");
+
+# ─── Device Info ──────────────────────────────────────────────────────────────
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      icon: mdi:ip-network
+
+# ─── Deep Sleep ───────────────────────────────────────────────────────────────
+# Mirrors the lightsleep(270000) in MicroPython. The device wakes either after
+# 4m30s or immediately when the flow sensor pulls GPIO4 low (beer is poured).
+#
+# On wake, ESPHome boots fully: connects WiFi, connects MQTT, publishes sensor
+# values, then sleeps again. The boot + publish cycle takes ~3-5s, so the first
+# fraction of a pour may not be counted. At 450 pulses/liter this is a small
+# error — acceptable for keg level tracking.
+#
+# OTA: flash while the device is in its ~5s awake window after boot, or hold
+# GPIO0 low on boot to enter the bootloader manually.
+
+deep_sleep:
+  id: deep_sleep_control
+  sleep_duration: 270s           # SLEEP_INTERVAL = 270000ms (4m30s)
+  wakeup_pin:
+    number: ${flow_pin}
+    allow_other_uses: true       # shared with pulse_meter
+  wakeup_pin_mode: INVERT_WAKEUP # wake on LOW (sensor pulls low when active)
