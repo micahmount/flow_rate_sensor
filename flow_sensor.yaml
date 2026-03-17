@@ -37,14 +37,6 @@ esp32:
 logger:
   level: INFO
 
-# ─── API (disabled — using MQTT + deep_sleep instead) ────────────────────────
-# The dashboard requires an api: block to adopt the device. It won't maintain
-# a persistent connection while deep_sleep is active; that's expected.
-
-api:
-  encryption:
-    key: !secret api_encryption_key
-
 # ─── OTA ──────────────────────────────────────────────────────────────────────
 # OTA still works — flash while the device is awake (first 30s after boot,
 # or trigger a wake via the MQTT wake topic before flashing).
@@ -255,6 +247,7 @@ text_sensor:
 
 deep_sleep:
   id: deep_sleep_control
+  run_duration: 15s              # stay awake long enough to connect WiFi + MQTT and publish
   sleep_duration: 270s           # SLEEP_INTERVAL = 270000ms (4m30s)
   wakeup_pin:
     number: ${flow_pin}
