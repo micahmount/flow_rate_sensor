@@ -144,13 +144,13 @@ Go to [micropython.org/download/ESP32_GENERIC](https://micropython.org/download/
 Plug in your ESP32 via USB, then run (check `ls /dev/ttyUSB*` to find your device):
 
 ```bash
-esptool.py --port /dev/ttyUSB0 erase_flash
+esptool --port /dev/ttyUSB0 erase-flash
 ```
 
 ### Step 4 — Flash MicroPython
 
 ```bash
-esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash -z 0x1000 ESP32_GENERIC-*.bin
+esptool --port /dev/ttyUSB0 --chip esp32  --baud 460800 write-flash -z 0x1000 ESP32_GENERIC-*.bin
 ```
 
 Replace `ESP32_GENERIC-*.bin` with the actual filename you downloaded.
@@ -216,11 +216,12 @@ To find your Home Assistant IP address, go to **Settings → System → Network*
 Using **mpremote**:
 
 ```bash
+# Copy secrets.py
+mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
+
 # Deploy main.py
 mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
 
-# Copy secrets.py
-mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
 ```
 
 ### Step 3 — (Optional) Enable WebREPL
@@ -232,11 +233,13 @@ mpremote connect /dev/ttyUSB0 repl
 ```
 
 In the REPL, type:
+
 ```python
 import webrepl_setup
 ```
 
 Follow the prompts:
+
 - Would you like to enable WebREPL? → **E** to enable
 - Set a password (e.g., "esp32pw")
 
@@ -252,7 +255,7 @@ mpremote connect /dev/ttyUSB0 reset
 
 Or press the Reset button on the ESP32. Watch the output — you should see:
 
-```
+```bash
 Connecting to WiFi...
 WiFi connected: 192.168.1.XXX
 MQTT connected
@@ -275,6 +278,7 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 The ESP32 runs an OTA update server that allows you to update `main.py` wirelessly without connecting via USB.
 
 **Requirements:**
+
 - Device must be awake (use MQTT wake button or wait for a publish cycle)
 - You must know the device's IP address
 
@@ -283,11 +287,12 @@ The ESP32 runs an OTA update server that allows you to update `main.py` wireless
 1. **Wake the device** using the MQTT wake button in Home Assistant (or wait for it to wake naturally)
 
 2. **Navigate to the OTA server** in your browser:
-   ```
-   http://<esp32-ip>:8080
-   ```
-   
-   For example: `http://192.168.1.100:8080`
+
+    ```bash
+      http://<esp32-ip>:8080
+    ```
+
+    For example: `http://192.168.1.100:8080`
 
 3. **Upload the new `main.py`** using the web form
 
@@ -297,7 +302,7 @@ The ESP32 runs an OTA update server that allows you to update `main.py` wireless
 
 ---
 
-## Setting Up the Dashboard
+## Setting Up the Dashboard in Home Assistant
 
 ### Option 1: Using the UI (Recommended)
 
@@ -309,6 +314,7 @@ The easiest way to create a dashboard is using Home Assistant's built-in UI:
 4. Click **Add Card** and add the following cards:
 
 **Card 1 - Keg Level Gauge:**
+
 - Card type: **Gauge**
 - Entity: `sensor.keg_level`
 - Min: 0, Max: 100
@@ -316,6 +322,7 @@ The easiest way to create a dashboard is using Home Assistant's built-in UI:
 - Color: Amber (or use theme colors)
 
 **Card 2 - Flow Stats:**
+
 - Card type: **Entities** (or **Statistic** card if available)
 - Add entities:
   - `sensor.keg_remaining` (liters left)
@@ -323,6 +330,7 @@ The easiest way to create a dashboard is using Home Assistant's built-in UI:
   - `sensor.total_volume` (total dispensed)
 
 **Card 3 - Reset Button:**
+
 - Card type: **Button**
 - Entity: Create a helper (Settings → Devices & Services → Helpers → Button) with MQTT action
 - Or use an **MQTT Button** (see configuration below)
@@ -386,7 +394,7 @@ When you put on a fresh keg, tap the **🔄 New Keg — Reset to Full** button o
 
 You can also trigger the reset from any MQTT client, or via a Home Assistant automation, by publishing any message to:
 
-```
+```bash
 home/flow_sensor/reset
 ```
 
@@ -411,7 +419,7 @@ mqtt:
 
 Restart Home Assistant, then click the button to wake the device. It will stay awake for 5 minutes, giving you time to connect to WebREPL at `ws://<esp32-ip>:8266`.
 
-### MQTT Reset Button
+#### MQTT Reset Button
 
 To add a reset button in Home Assistant:
 
@@ -449,7 +457,7 @@ On a 10,000 mAh battery bank, expect **~3 months** of operation under normal use
 Key settings in `main.py`:
 
 | Constant | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes |
 | `SLEEP_INTERVAL` | 270000ms | Lightsleep duration (4.5 minutes) |
 | `WAKE_TIMEOUT_SECONDS` | 300 | Time to stay awake after wake command (5 min) |
@@ -482,7 +490,7 @@ The sensor's calibration constant (450 pulses per liter) is nominal. If you want
 ## File Reference
 
 | File | Description |
-|---|---|
+| --- | --- |
 | `main.py` | Main ESP32 firmware — deploy as `main.py` on the device |
 | `ota_updater.py` | OTA update server for wireless firmware updates |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |

@@ -14,15 +14,10 @@ import esp32
 from machine import Pin, lightsleep
 from umqtt.simple import MQTTClient
 import ujson
-import _thread
 try:
     import secrets
 except ImportError:
     raise ImportError("secrets.py not found. Copy secrets.py.example to secrets.py and configure.")
-try:
-    from ota_updater import start_update_server
-except:
-    print("OTA updater not available")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -52,6 +47,7 @@ PULSES_PER_LITER  = 450     # pulses per liter (calibrate: 450 is common for the
 PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
 SLEEP_INTERVAL    = 270000  # ms to sleep between cycles (4.5 minutes)
 WAKE_TIMEOUT_SECONDS = 300  # stay awake for 5 minutes after wake command
+TIMEZONE_SECONDS  = -8 * 60 * 60  # timezone offset in seconds (e.g., -8 for PST)
 DEBOUNCE_MS       = 50      # debounce time in milliseconds (increased to prevent false triggers)
 MAX_FLOW_RATE     = 30      # maximum possible flow rate in L/min (sanity check)
 MIN_PULSE_MS      = 2       # minimum time between valid pulses (physical limit of sensor)
@@ -71,6 +67,11 @@ discovery_done  = False
 wake_timeout    = 0
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
+
+def log(msg):
+    t = time.localtime(time.time() + TIMEZONE_SECONDS)
+    ts = f"{t[0]}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
+    print(f"[{ts}] {msg}")
 
 def pulse_handler(pin):
     global pulse_count, total_pulses, last_pulse_time, flow_detected
@@ -107,17 +108,17 @@ def connect_wifi():
     wlan.active(True)
     wlan.config(pm=0)
     if not wlan.isconnected():
-        print("Connecting to WiFi...")
+        log("Connecting to WiFi...")
         wlan.connect(WIFI_SSID, WIFI_PASSWORD)
         for _ in range(20):
             if wlan.isconnected():
                 break
             time.sleep(1)
     if wlan.isconnected():
-        print("WiFi connected:", wlan.ifconfig()[0])
+        log("WiFi connected: " + wlan.ifconfig()[0])
         return wlan
     else:
-        print("WiFi connection failed, retrying...")
+        log("WiFi connection failed, retrying...")
         return None
 
 # ─── MQTT ─────────────────────────────────────────────────────────────────────
@@ -137,17 +138,17 @@ def connect_mqtt():
     client.subscribe(TOPIC_RESET)
     client.subscribe(TOPIC_WAKE)
     client.publish(TOPIC_AVAILABILITY, b"online", retain=True)
-    print("MQTT connected")
+    log("MQTT connected")
     return client
 
 def mqtt_callback(topic, msg):
     global keg_dispensed, wake_timeout
     if topic == TOPIC_RESET:
         keg_dispensed = 0.0
-        print("Keg reset to full (18.93 L)")
+        log("Keg reset to full (18.93 L)")
     elif topic == TOPIC_WAKE:
         wake_timeout = WAKE_TIMEOUT_SECONDS
-        print(f"Wake command received, staying awake for {WAKE_TIMEOUT_SECONDS}s")
+        log("Wake command received, staying awake for " + str(WAKE_TIMEOUT_SECONDS) + "s")
 
 def publish_discovery(client):
     """
@@ -240,7 +241,7 @@ def publish_discovery(client):
         ujson.dumps(volume_config).encode(),
         retain=True
     )
-    print("Auto-discovery published to Home Assistant")
+    log("Auto-discovery published to Home Assistant")
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -260,16 +261,9 @@ def main():
         # Start WebREPL
         try:
             webrepl.start()
-            print(f"WebREPL started at ws://{wlan.ifconfig()[0]}:8266")
+            log(f"WebREPL started at ws://{wlan.ifconfig()[0]}:8266")
         except Exception as e:
-            print("WebREPL error:", e)
-            
-        # Start OTA update server
-        try:
-            _thread.start_new_thread(start_update_server, ())
-            print(f"OTA update server started at http://{wlan.ifconfig()[0]}:8080")
-        except Exception as e:
-            print("Failed to start OTA server:", e)
+            log("WebREPL error: " + str(e))
 
     client = None
     discovery_done = False
@@ -292,7 +286,7 @@ def main():
             should_publish = elapsed >= PUBLISH_INTERVAL or (has_flow and elapsed >= 5)
             
             if should_publish:
-                print(f"Attempting publish... elapsed={elapsed:.1f}s, has_flow={has_flow}")
+                log(f"Attempting publish... elapsed={elapsed:.1f}s, has_flow={has_flow}")
                 # Connect WiFi
                 wlan = connect_wifi()
                 if wlan is None:
@@ -306,7 +300,7 @@ def main():
                         publish_discovery(client)
                         discovery_done = True
                 except Exception as e:
-                    print("MQTT connection failed:", e)
+                    log("MQTT connection failed: " + str(e))
                     client = None
                     time.sleep(5)
                     continue
@@ -345,16 +339,16 @@ def main():
 
                 try:
                     client.publish(TOPIC_STATE, payload.encode())
-                    print(f"Published → flow: {flow_rate} L/min | keg: {keg_remaining}L ({keg_percent}%)")
+                    log(f"Published → flow: {flow_rate} L/min | keg: {keg_remaining}L ({keg_percent}%)")
                 except Exception as e:
-                    print("MQTT publish error:", e)
+                    log("MQTT publish error: " + str(e))
 
                 # Disconnect MQTT but keep WiFi for WebREPL
                 if client is not None:
                     try:
                         client.disconnect()
                     except Exception as e:
-                        print("MQTT disconnect error:", e)
+                        log("MQTT disconnect error: " + str(e))
                     client = None
 
             # Wake mode: stay awake if wake_timeout is active
@@ -369,11 +363,12 @@ def main():
                 if wlan is not None and wlan.isconnected():
                     wlan.disconnect()
                     wlan.active(False)
-                print(f"Entering lightsleep for {SLEEP_INTERVAL}ms...")
+                log(f"Entering lightsleep for {SLEEP_INTERVAL}ms...")
+                time.sleep(2)  # Allow log to finish flushing
                 lightsleep(SLEEP_INTERVAL)  # Suspend CPU, wakes on GPIO interrupt or timer
             
         except Exception as e:
-            print("Main loop error:", e)
+            log("Main loop error: " + str(e))
             time.sleep(5)
 
 main()
