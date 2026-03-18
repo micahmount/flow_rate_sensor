@@ -38,7 +38,7 @@ cards:
         name: Full
         icon: mdi:percent
       - entity: sensor.keg_remaining
-        name: Remaining
+        name: Remaining (L)
         icon: mdi:beer-outline
       - entity: sensor.water_flow_rate
         name: Flow Rate

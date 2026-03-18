@@ -21,4 +21,4 @@ cards:
       - entity: sensor.water_flow_rate
         name: Flow Rate
       - entity: sensor.water_total_volume
-        name: Total Poured
+        name: Dispensed
