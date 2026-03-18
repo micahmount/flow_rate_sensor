@@ -48,7 +48,7 @@ PULSES_PER_LITER  = 450     # pulses per liter (calibrate: 450 is common for the
 PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
 SLEEP_INTERVAL    = 270000  # ms to sleep between cycles (4.5 minutes)
 WAKE_TIMEOUT_SECONDS = 300  # stay awake for 5 minutes after wake command
-TIMEZONE_SECONDS  = -8 * 60 * 60  # timezone offset in seconds (e.g., -8 for PST)
+TIMEZONE_BASE    = -8 * 60 * 60  # base timezone offset in seconds (e.g., -8 for PST)
 DEBOUNCE_MS       = 50      # debounce time in milliseconds (increased to prevent false triggers)
 MAX_FLOW_RATE     = 30      # maximum possible flow rate in L/min (sanity check)
 MIN_PULSE_MS      = 2       # minimum time between valid pulses (physical limit of sensor)
@@ -69,8 +69,15 @@ wake_timeout    = 0
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
+def get_timezone_offset():
+    t = time.localtime()
+    month = t[1]
+    if month >= 4 and month <= 10:
+        return TIMEZONE_BASE + 3600  # DST: add 1 hour
+    return TIMEZONE_BASE
+
 def log(msg):
-    t = time.localtime(time.time() + TIMEZONE_SECONDS)
+    t = time.localtime(time.time() + get_timezone_offset())
     ts = f"{t[0]}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
     print(f"[{ts}] {msg}")
 
@@ -275,7 +282,7 @@ def main():
     # Configure GPIO wake from lightsleep - wake on LOW (sensor pulls low when active)
     esp32.wake_on_ext0(pin=sensor_pin, level=esp32.WAKEUP_ALL_LOW)
 
-    # Initialize WiFi, WebREPL, and OTA
+    # Initialize WiFi and WebREPL
     wlan = connect_wifi()
     if wlan is not None:
         # Start WebREPL

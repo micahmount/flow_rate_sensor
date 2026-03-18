@@ -27,11 +27,11 @@ The ESP32 automatically publishes the following data to Home Assistant via MQTT:
 | Entity | MQTT Topic | Description |
 |--------|------------|-------------|
 | Flow Rate | `home/flow_sensor/flow_rate` | Current flow rate in L/min |
-| Total Volume | `home/flow_sensor/total_volume` | Total beer dispensed from the keg (L) |
+| Dispensed | `home/flow_sensor/total_volume` | Total beer dispensed from the keg (L) |
+| Remaining | `home/flow_sensor/keg_remaining` | Liters remaining in the keg |
 | Keg Level | `home/flow_sensor/keg_level` | Keg fullness as a percentage (0-100%) |
-| Keg Remaining | `home/flow_sensor/keg_remaining` | Liters remaining in the keg |
 
-Home Assistant auto-discovers these as sensor entities automatically — no manual configuration required.
+Home Assistant auto-discovers these as sensor entities automatically — no manual configuration required. A wake button is also auto-discovered to keep the device awake for WebREPL access.
 
 ---
 
@@ -273,35 +273,6 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 
 ---
 
-## Over-the-Air (OTA) Updates
-
-The ESP32 runs an OTA update server that allows you to update `main.py` wirelessly without connecting via USB.
-
-**Requirements:**
-
-- Device must be awake (use MQTT wake button or wait for a publish cycle)
-- You must know the device's IP address
-
-**To update firmware:**
-
-1. **Wake the device** using the MQTT wake button in Home Assistant (or wait for it to wake naturally)
-
-2. **Navigate to the OTA server** in your browser:
-
-    ```bash
-      http://<esp32-ip>:8080
-    ```
-
-    For example: `http://192.168.1.100:8080`
-
-3. **Upload the new `main.py`** using the web form
-
-4. The device will automatically reboot with the new firmware
-
-**Note:** The OTA server only runs when the device is awake. If you can't connect, send a wake command first.
-
----
-
 ## Setting Up the Dashboard in Home Assistant
 
 ### Option 1: Using the UI (Recommended)
@@ -461,6 +432,7 @@ Key settings in `main.py`:
 | `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes |
 | `SLEEP_INTERVAL` | 270000ms | Lightsleep duration (4.5 minutes) |
 | `WAKE_TIMEOUT_SECONDS` | 300 | Time to stay awake after wake command (5 min) |
+| `TIMEZONE_SECONDS` | -28800 | Timezone offset in seconds (-8×60×60 for PST) |
 | `PULSES_PER_LITER` | 450 | Sensor calibration (pulses per liter) |
 
 ---
@@ -492,7 +464,6 @@ The sensor's calibration constant (450 pulses per liter) is nominal. If you want
 | File | Description |
 | --- | --- |
 | `main.py` | Main ESP32 firmware — deploy as `main.py` on the device |
-| `ota_updater.py` | OTA update server for wireless firmware updates |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
 | `mosquitto/` | Docker Compose config for Mosquitto broker — copy to Docker host and run |
 | `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with Bar Card (requires HACS) |
