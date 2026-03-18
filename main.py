@@ -9,6 +9,7 @@
 
 import network
 import time
+import ntptime
 import webrepl
 import esp32
 from machine import Pin, lightsleep
@@ -116,6 +117,11 @@ def connect_wifi():
             time.sleep(1)
     if wlan.isconnected():
         log("WiFi connected: " + wlan.ifconfig()[0])
+        try:
+            ntptime.settime()
+            log("NTP time synced")
+        except Exception as e:
+            log("NTP sync failed: " + str(e))
         return wlan
     else:
         log("WiFi connection failed, retrying...")
@@ -179,7 +185,7 @@ def publish_discovery(client):
 
     # Total volume sensor
     volume_config = {
-        "name": "Total Volume",
+        "name": "Dispensed",
         "unique_id": "water_total_volume",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
@@ -208,7 +214,7 @@ def publish_discovery(client):
 
     # Keg remaining (liters)
     keg_liters_config = {
-        "name": "Keg Remaining",
+        "name": "Remaining",
         "unique_id": "keg_remaining",
         "state_topic": TOPIC_STATE.decode(),
         "availability_topic": TOPIC_AVAILABILITY.decode(),
@@ -239,6 +245,20 @@ def publish_discovery(client):
     client.publish(
         b"homeassistant/sensor/flow_sensor/total_volume/config",
         ujson.dumps(volume_config).encode(),
+        retain=True
+    )
+
+    # Wake button
+    wake_config = {
+        "name": "Flow Sensor Wake",
+        "unique_id": "flow_sensor_wake",
+        "command_topic": TOPIC_WAKE.decode(),
+        "payload_press": "WAKE",
+        "device": device
+    }
+    client.publish(
+        b"homeassistant/button/flow_sensor_wake/config",
+        ujson.dumps(wake_config).encode(),
         retain=True
     )
     log("Auto-discovery published to Home Assistant")
@@ -339,7 +359,7 @@ def main():
 
                 try:
                     client.publish(TOPIC_STATE, payload.encode())
-                    log(f"Published → flow: {flow_rate} L/min | keg: {keg_remaining}L ({keg_percent}%)")
+                    log(f"Published → flow: {flow_rate} L/min | dispensed: {total_volume}L | remaining: {keg_remaining}L ({keg_percent}%)")
                 except Exception as e:
                     log("MQTT publish error: " + str(e))
 
