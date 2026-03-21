@@ -222,6 +222,11 @@ mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
 # Deploy main.py
 mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
 
+# Deploy calculations.py
+mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
+
+# (Optional) Deploy fresh state file
+mpremote connect /dev/ttyUSB0 fs cp flow_state.json.example :flow_state.json
 ```
 
 ### Step 3 — (Optional) Enable WebREPL
@@ -371,6 +376,60 @@ home/flow_sensor/reset
 
 ---
 
+## State Management
+
+The ESP32 persists its state to flash storage so it survives deepsleep cycles and device reboots.
+
+### State File
+
+The device stores state in `/flow_state.json` on the ESP32's flash filesystem:
+
+```json
+{"keg_dispensed": 0.0, "total_pulses": 0, "stay_awake": 0}
+```
+
+| Field | Description | Reset? |
+|-------|-------------|--------|
+| `keg_dispensed` | Liters poured from current keg | Yes — MQTT reset |
+| `total_pulses` | Lifetime pulse count | No — never reset |
+| `stay_awake` | Seconds to stay awake | No — set by wake command |
+
+A `flow_state.json` template is included in the project directory. You can deploy it to the device:
+
+```bash
+mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json
+```
+
+### When State is Saved
+
+- **Before entering deepsleep** — so state survives the sleep/wake cycle
+- **After MQTT reset command** — persists the keg reset to flash
+- **After MQTT wake command** — persists the wake timeout to flash
+- **Every second while awake** — keeps `stay_awake` countdown up to date
+
+### Resetting State
+
+**From Home Assistant:** Publish to `home/flow_sensor/reset` — sets `keg_dispensed` to 0.0.
+
+**From the device button:** Pressing the reset button on the ESP32 reboots it. On reboot, `keg_dispensed` is loaded from flash. Note: the device resets `keg_dispensed` to 0.0 on every boot (simulating a fresh keg on each physical reset).
+
+**From MQTT (full reset):** Publish to `home/flow_sensor/reset` repeatedly for 10 seconds. The device listens for commands for 2 seconds after each publish cycle, so multiple presses will catch it.
+
+**Manually on device:** Connect via WebREPL or mpremote:
+
+```python
+import calculations
+calculations.save_state(keg_dispensed=0.0, total_pulses=0, stay_awake=0)
+```
+
+### Viewing State
+
+```bash
+mpremote connect /dev/ttyUSB0 eval "open('/flow_state.json').read()"
+```
+
+---
+
 ## Waking the Device for WebREPL Access
 
 The ESP32 spends most of its time in lightsleep to conserve battery. To access WebREPL or make code changes:
@@ -416,12 +475,14 @@ The device wakes every 4.5 minutes to publish data. During this window, you can 
 
 ## Battery Optimization
 
-The ESP32 uses **lightsleep** mode to achieve long battery life:
+The ESP32 uses **deepsleep** mode to achieve long battery life:
 
 - **Active:** ~150-250mA (WiFi + MQTT publishing, ~2 seconds per cycle)
-- **Sleep:** ~1mA (lightsleep with CPU suspended)
+- **Sleep:** ~10µA (deepsleep with RAM off, only RTC running)
 
-On a 10,000 mAh battery bank, expect **~3 months** of operation under normal use.
+On a 10,000 mAh battery bank, expect **~4-6 months** of operation under normal use.
+
+> **Note:** The device shows "offline" in Home Assistant while in deepsleep. It only shows "online" briefly when it wakes to publish (~2 seconds every 4.5 minutes).
 
 ### Configuration
 
@@ -457,6 +518,12 @@ This can happen if the keg was tapped when already partially empty and then rese
 **Readings seem inaccurate**
 The sensor's calibration constant (450 pulses per liter) is nominal. If you want higher accuracy, you can calibrate it yourself by pouring a known volume (e.g. exactly 1 liter into a measuring jug) and adjusting the `PULSES_PER_LITER` constant in `main.py` based on the actual pulse count observed.
 
+**State not persisting across deepsleep**
+The state file (`/flow_state.json`) must exist on the device. If the device was never deployed with a state file, create one: `mpremote connect /dev/ttyUSB0 fs cp flow_state.json.example :flow_state.json`
+
+**Device shows offline in Home Assistant**
+This is expected behavior — the device is in deepsleep most of the time. It only appears online briefly (~2 seconds) when it wakes to publish. Use the MQTT wake button to keep it online for 5 minutes.
+
 ---
 
 ## File Reference
@@ -464,7 +531,10 @@ The sensor's calibration constant (450 pulses per liter) is nominal. If you want
 | File | Description |
 | --- | --- |
 | `main.py` | Main ESP32 firmware — deploy as `main.py` on the device |
+| `calculations.py` | Pure functions for flow rate, keg calculations, state persistence |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
+| `flow_state.json.example` | State file template — deploy to device for fresh start |
+| `tests/` | Host tests for `calculations.py` (run with `pytest tests/`) |
 | `mosquitto/` | Docker Compose config for Mosquitto broker — copy to Docker host and run |
 | `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with Bar Card (requires HACS) |
 | `keg_dashboard.yaml` | Simple YAML dashboard without custom cards (fallback option) |

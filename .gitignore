@@ -10,3 +10,6 @@ mosquitto/config/mosquitto.passwd
 # python virtual environments
 venv
 .venv
+
+# Device state file - do not commit
+flow_state.json

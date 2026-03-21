@@ -11,6 +11,7 @@ import network
 import time
 import ntptime
 import webrepl
+import esp32
 from machine import Pin, deepsleep
 from umqtt.simple import MQTTClient
 import ujson
@@ -48,6 +49,7 @@ PULSES_PER_LITER  = 450     # pulses per liter (calibrate: 450 is common for the
 PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
 SLEEP_INTERVAL    = 270000  # ms to sleep between cycles (4.5 minutes)
 WAKE_TIMEOUT_SECONDS = 300  # stay awake for 5 minutes after wake command
+COMMAND_LISTEN_SECONDS = 2   # stay connected after publish to receive HA commands
 TIMEZONE_BASE    = -8 * 60 * 60  # base timezone offset in seconds (e.g., -8 for PST)
 DEBOUNCE_MS       = 50      # debounce time in milliseconds (increased to prevent false triggers)
 MAX_FLOW_RATE     = 30      # maximum possible flow rate in L/min (sanity check)
@@ -65,6 +67,8 @@ wlan            = None
 client          = None
 discovery_done   = False
 stay_awake      = 0
+flow_detected   = False
+sensor_pin      = None
 
 # ─── Interrupt handler ────────────────────────────────────────────────────────
 
@@ -76,7 +80,7 @@ def log(msg):
     print(f"[{ts}] {msg}")
 
 def pulse_handler(pin):
-    global pulse_count, total_pulses, last_pulse_time
+    global pulse_count, total_pulses, last_pulse_time, flow_detected
     now = time.ticks_ms()
 
     # Validate timing between pulses
@@ -97,6 +101,7 @@ def pulse_handler(pin):
     last_pulse_time = now
     pulse_count  += 1
     total_pulses += 1
+    flow_detected = True
 
 # ─── State Persistence ────────────────────────────────────────────────────────
 
@@ -104,6 +109,7 @@ def load_state():
     global keg_dispensed, total_pulses, stay_awake
     keg_dispensed, total_pulses, stay_awake = calculations.load_state()
     log(f"State loaded: dispensed={keg_dispensed}L, pulses={total_pulses}")
+
 
 def save_state():
     global keg_dispensed, total_pulses, stay_awake
@@ -283,6 +289,7 @@ def publish_discovery(client):
 def main():
     global pulse_count, last_publish, keg_dispensed, total_pulses
     global last_pulse_time, prev_count, wlan, client, discovery_done, stay_awake
+    global flow_detected, sensor_pin
 
     # Load persisted state
     load_state()
@@ -309,6 +316,7 @@ def main():
 
     while True:
         try:
+            flow_detected = False  # Reset each cycle
             now = time.time()
             elapsed = now - last_publish
 
@@ -370,29 +378,43 @@ def main():
                 except Exception as e:
                     log("MQTT publish error: " + str(e))
 
-                # Disconnect MQTT but keep WiFi for WebREPL
-                if client is not None:
+                # Stay connected for COMMAND_LISTEN_SECONDS to receive HA commands (reset, wake)
+                for _ in range(COMMAND_LISTEN_SECONDS):
                     try:
-                        client.disconnect()
-                    except Exception as e:
-                        log("MQTT disconnect error: " + str(e))
-                    client = None
+                        client.check_msg()
+                    except Exception:
+                        pass
+                    time.sleep(1)
 
             # Decrement stay_awake counter
             if stay_awake > 0:
                 stay_awake -= 1
                 save_state()
                 time.sleep(1)
-            else:
-                # Save state before deepsleep
+            elif flow_detected:
+                # Flow detected — stay awake to keep publishing
+                flow_detected = False
                 save_state()
-                # Disconnect WiFi before deepsleep
+                time.sleep(1)
+            else:
+                # No flow, no wake — go to deepsleep
+                save_state()
+                # Disconnect MQTT and WiFi
+                if client is not None:
+                    try:
+                        client.disconnect()
+                    except Exception as e:
+                        log("MQTT disconnect error: " + str(e))
+                    client = None
                 if wlan is not None and wlan.isconnected():
                     wlan.disconnect()
                     wlan.active(False)
-                log(f"Entering deepsleep for {SLEEP_INTERVAL}ms...")
+                # Configure GPIO wake so device wakes when flow sensor detects pulses
+                esp32.wake_on_ext0(pin=sensor_pin, level=esp32.WAKEUP_ALL_LOW)
+                log(f"Entering deepsleep for {SLEEP_INTERVAL}ms... (GPIO wake armed)")
                 time.sleep(2)  # Allow log to finish flushing
                 deepsleep(SLEEP_INTERVAL)  # Reboots on wake (GPIO or timer)
+                # Reset flow_detected on wake (globals reset on reboot)
 
         except Exception as e:
             log("Main loop error: " + str(e))
