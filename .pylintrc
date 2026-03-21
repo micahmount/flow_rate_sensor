@@ -1,0 +1,56 @@
+# Pylint config for MicroPython ESP32 project
+# Generated for this codebase
+
+[BASIC]
+good-names = "_"
+argument-naming-style = snake_case
+attr-naming-style = snake_case
+class-naming-style = PascalCase
+const-naming-style = UPPER_CASE
+function-naming-style = snake_case
+method-naming-style = snake_case
+module-naming-style = snake_case
+variable-naming-style = snake_case
+
+
+[FORMAT]
+max-line-length = 120
+indent-string = "    "
+
+[MESSAGES CONTROL]
+disable =
+    missing-module-docstring,
+    missing-function-docstring,
+    missing-class-docstring,
+    import-error,
+    no-name-in-module,
+    no-member,
+    ungrouped-imports,
+    wrong-import-order,
+    broad-exception-caught,
+    global-statement,
+    global-variable-not-assigned,
+    redefined-outer-name,
+    too-few-public-methods,
+    too-many-ancestors,
+    too-many-arguments,
+    too-many-branches,
+    too-many-instance-attributes,
+    too-many-lines,
+    too-many-locals,
+    too-many-public-methods,
+    too-many-return-statements,
+    too-many-statements,
+    unsubscriptable-object,
+    unsupported-assignment-operation,
+    unsupported-membership-test,
+    unused-argument,
+    invalid-name,
+    duplicate-code
+
+[MASTER]
+extension-pkg-allow-list = ujson
+
+[IMPORTS]
+known-standard-library = time,network
+known-third-party = umqtt, ujson

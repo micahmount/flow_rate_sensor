@@ -1,6 +1,53 @@
 # AGENTS.md - Flow Rate Sensor Project
 
-## Project Overview
+## Preferred Methodology: TDD
+
+This project uses **Test-Driven Development (TDD)** for all new features and refactors:
+
+1. **Red** — Write a failing test first
+2. **Green** — Implement the minimum code to pass
+3. **Gold** — Refactor for clarity, tests still pass
+
+### Embedded TDD Strategy (MicroPython/ESP32)
+
+Hardware-dependent code (`machine.Pin`, `time.ticks_ms()`, WiFi, MQTT) cannot be unit tested on the host. Strategy:
+
+- **Extract pure logic** into small, testable functions (calculations, state transformations, payload building)
+- **Keep hardware code** in `main.py` or a `hardware.py` module
+- **Mock at boundaries** — use `pytest.fixture` to inject mock hardware (e.g., `tmp_path` for filesystem state)
+- **Manual testing** for hardware integration (deploy to ESP32, watch serial output, verify MQTT in Home Assistant)
+
+### Testable Code Patterns
+
+```python
+# Pure: testable ✅
+def calculate_flow_rate(pulse_count, elapsed, pulses_per_liter):
+    if elapsed < 0.1:
+        return 0
+    return round((pulse_count / elapsed) * 60 / pulses_per_liter, 3)
+
+# Impure: hardware ❌
+def pulse_handler(pin):
+    now = time.ticks_ms()  # hardware
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+.venv/bin/pytest tests/
+
+# Run with coverage
+.venv/bin/pytest tests/ -v
+
+# Run specific test file
+.venv/bin/pytest tests/test_calculations.py
+
+# Run specific test class
+.venv/bin/pytest tests/test_calculations.py::TestResetKeg -v
+```
+
+---
 
 This is a **MicroPython** project for an ESP32 microcontroller that reads a hall effect flow sensor and publishes data to Home Assistant via MQTT. The code runs directly on the ESP32 device.
 
@@ -18,7 +65,7 @@ This project uses **mpremote** for deployment:
 
 ```bash
 # Install mpremote
-pip install mpremote
+.venv/bin/pip install mpremote
 
 # Deploy main.py
 mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
@@ -34,7 +81,7 @@ Or use **esptool** to flash firmware:
 
 ```bash
 # Install esptool
-pip install esptool
+.venv/bin/pip install esptool
 
 # Erase ESP32 flash
 esptool.py --port /dev/ttyUSB0 erase_flash
@@ -56,12 +103,12 @@ minicom -D /dev/ttyUSB0 -b 115200
 # Exit: Ctrl+A, then X, then Enter
 ```
 
-### Running a Single Test
+### Manual Hardware Testing
 
-**No formal test suite exists.** This is an embedded project without automated tests. Test manually by:
-1. Deploying code to the ESP32
-2. Watching the serial output
-3. Checking Home Assistant for MQTT entities
+Hardware integration tests (WiFi, MQTT, deepsleep) must be tested manually:
+1. Deploy code to the ESP32
+2. Watch the serial output
+3. Check Home Assistant for MQTT entities
 
 ---
 
@@ -161,12 +208,27 @@ except Exception:
 
 ## Working with This Project
 
+### Linting
+
+```bash
+# Install pylint (first time)
+.venv/bin/pip install pylint
+
+# Run lint
+.venv/bin/pylint main.py
+```
+
 ### Adding New Features
 
-1. Edit `main.py`
-2. Deploy to ESP32 using mpremote
-3. Monitor serial output
-4. Verify MQTT messages arrive in Home Assistant
+Follow the TDD cycle for all new features:
+
+1. **Red** — Write a failing test first
+2. **Green** — Implement the minimum code to pass
+3. **Gold** — Refactor for clarity, tests still pass
+4. Run `pylint main.py` — target 10/10
+5. Deploy to ESP32 using mpremote
+6. Monitor serial output
+7. Verify MQTT messages arrive in Home Assistant
 
 ### Known Issues / Gotchas
 
