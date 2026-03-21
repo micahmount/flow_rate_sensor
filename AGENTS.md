@@ -1,51 +1,23 @@
 # AGENTS.md - Flow Rate Sensor Project
 
-## Preferred Methodology: TDD
+## Testing
 
-This project uses **Test-Driven Development (TDD)** for all new features and refactors:
+**Host tests** (`tests/test_calculations.py`):
+- Pure functions only (calculations, state persistence)
+- Run with: `.venv/bin/pytest tests/`
 
-1. **Red** — Write a failing test first
-2. **Green** — Implement the minimum code to pass
-3. **Gold** — Refactor for clarity, tests still pass
+**Device tests** (hardware integration):
+- Requires ESP32 connected to `/dev/ttyUSB0`
+- Tests run on-device via mpremote
+- See `tests/test_device.py` for device test template
 
-### Embedded TDD Strategy (MicroPython/ESP32)
+### Manual Testing
 
-Hardware-dependent code (`machine.Pin`, `time.ticks_ms()`, WiFi, MQTT) cannot be unit tested on the host. Strategy:
-
-- **Extract pure logic** into small, testable functions (calculations, state transformations, payload building)
-- **Keep hardware code** in `main.py` or a `hardware.py` module
-- **Mock at boundaries** — use `pytest.fixture` to inject mock hardware (e.g., `tmp_path` for filesystem state)
-- **Manual testing** for hardware integration (deploy to ESP32, watch serial output, verify MQTT in Home Assistant)
-
-### Testable Code Patterns
-
-```python
-# Pure: testable ✅
-def calculate_flow_rate(pulse_count, elapsed, pulses_per_liter):
-    if elapsed < 0.1:
-        return 0
-    return round((pulse_count / elapsed) * 60 / pulses_per_liter, 3)
-
-# Impure: hardware ❌
-def pulse_handler(pin):
-    now = time.ticks_ms()  # hardware
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-.venv/bin/pytest tests/
-
-# Run with coverage
-.venv/bin/pytest tests/ -v
-
-# Run specific test file
-.venv/bin/pytest tests/test_calculations.py
-
-# Run specific test class
-.venv/bin/pytest tests/test_calculations.py::TestResetKeg -v
-```
+Hardware integration (WiFi, MQTT, deepsleep):
+1. Deploy: `mpremote connect /dev/ttyUSB0 fs cp main.py :main.py`
+2. Reset: `mpremote connect /dev/ttyUSB0 reset`
+3. Watch serial output
+4. Check Home Assistant for MQTT entities
 
 ---
 
@@ -220,21 +192,17 @@ except Exception:
 
 ### Adding New Features
 
-Follow the TDD cycle for all new features:
-
-1. **Red** — Write a failing test first
-2. **Green** — Implement the minimum code to pass
-3. **Gold** — Refactor for clarity, tests still pass
-4. Run `pylint main.py` — target 10/10
-5. Deploy to ESP32 using mpremote
-6. Monitor serial output
-7. Verify MQTT messages arrive in Home Assistant
+1. Run `pylint main.py` — target 10/10
+2. Deploy to ESP32 using mpremote
+3. Test on device (see Testing section)
+4. Monitor serial output
+5. Verify MQTT messages arrive in Home Assistant
 
 ### Known Issues / Gotchas
 
 - MicroPython doesn't support all standard library modules
 - Memory is limited; avoid large data structures
-- The flow sensor calibration constant (`23`) may need adjustment for accuracy
+- The flow sensor calibration constant (`PULSES_PER_LITER = 450`) may need adjustment for accuracy
 
 ### Configuration Required Before Deploy
 
@@ -264,7 +232,7 @@ MQTT_PASSWORD = "your_password"
 
 To enable WebREPL access, add an MQTT Button to Home Assistant. This lets you wake the device from sleep mode.
 
-**Option 1: Using configuration.yaml**
+#### Option 1: Using configuration.yaml
 
 Add to your `configuration.yaml`:
 
@@ -278,7 +246,7 @@ mqtt:
 
 Then restart Home Assistant.
 
-**Option 2: Using MQTT Auto-Discovery**
+#### Option 2: Using MQTT Auto-Discovery
 
 Publish this to `homeassistant/button/flow_sensor_wake/config` (retain=True):
 
