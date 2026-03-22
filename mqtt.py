@@ -5,10 +5,11 @@ from umqtt.simple import MQTTClient
 
 # ─── Connect / Disconnect ─────────────────────────────────────────────────────
 
-def connect(config):
+def connect(config, callback):
     """
-    Connect to MQTT broker. Sets LWT, subscribes to command topics,
+    Connect to MQTT broker. Sets callback, LWT, subscribes to command topics,
     publishes availability=online. Returns connected client.
+    callback must be set before subscribe() so messages are not missed.
     """
     client = MQTTClient(
         config["client_id"],
@@ -18,6 +19,7 @@ def connect(config):
         password=config["password"],
         keepalive=60,
     )
+    client.set_callback(callback)
     client.set_last_will(config["topic_availability"], b"offline", retain=True)
     client.connect()
     client.subscribe(config["topic_reset"])
@@ -41,12 +43,11 @@ def publish_state(client, payload, config):
     client.publish(config["topic_state"], payload.encode())
 
 
-def listen(client, callback, seconds):
+def listen(client, seconds):
     """
     Poll for incoming MQTT messages for `seconds` seconds.
-    Calls callback(topic, msg) for each message received.
+    Callback must already be set via connect().
     """
-    client.set_callback(callback)
     for _ in range(seconds):
         try:
             client.check_msg()
@@ -146,10 +147,11 @@ def publish_discovery(client, config):
         (
             b"homeassistant/button/flow_sensor/wake/config",
             {
-                "name":             "Flow Sensor Wake",
+                "name":             "Stay Awake",
                 "unique_id":        "flow_sensor_wake",
                 "command_topic":    config["topic_wake"].decode(),
                 "payload_press":    "WAKE",
+                "retain":           True,
                 "device":           device,
             },
         ),

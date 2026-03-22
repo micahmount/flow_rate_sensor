@@ -29,6 +29,7 @@ PUBLISH_INTERVAL      = 30        # seconds between publishes
 SLEEP_INTERVAL        = 270000    # ms (4.5 minutes)
 WAKE_TIMEOUT_SECONDS  = 300       # seconds to stay awake after wake command
 COMMAND_LISTEN_SECONDS = 5        # seconds to listen for HA commands after publish
+MINIMUM_AWAKE_SECONDS = 30        # minimum time device stays awake per cycle
 TIMEZONE_BASE         = -8 * 3600 # PST (UTC-8)
 DEBOUNCE_MS           = 50
 MIN_PULSE_MS          = 2
@@ -151,6 +152,8 @@ def main():
     sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
     sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
 
+    boot_time = time.time()
+
     # Load persisted state
     state = state_module.load()
     log(f"Boot — dispensed={state['keg_dispensed']}L, "
@@ -206,14 +209,16 @@ def main():
 
             # Connect, publish, listen, disconnect
             try:
-                client = mqtt_module.connect(MQTT_CONFIG)
+                client = mqtt_module.connect(MQTT_CONFIG, make_callback(get_state, set_state))
                 if not discovery_done:
                     mqtt_module.publish_discovery(client, MQTT_CONFIG)
                     discovery_done = True
                 mqtt_module.publish_state(client, payload, MQTT_CONFIG)
                 log(f"Published — flow: {flow_rate} L/min | "
                     f"remaining: {keg_remaining}L ({keg_percent}%)")
-                mqtt_module.listen(client, make_callback(get_state, set_state), COMMAND_LISTEN_SECONDS)
+                mqtt_module.listen(client, COMMAND_LISTEN_SECONDS)
+                # Clear any retained wake command so it doesn't fire again next cycle
+                client.publish(MQTT_CONFIG["topic_wake"], b"", retain=True)
                 mqtt_module.disconnect(client)
             except Exception as e:
                 log("MQTT error: " + str(e))
@@ -224,6 +229,10 @@ def main():
 
         # Sleep or tick
         if state_module.should_sleep(state_ref[0]):
+            # Ensure device is awake for at least 30 seconds per cycle
+            elapsed_since_boot = time.time() - boot_time
+            if elapsed_since_boot < 30:
+                time.sleep(30 - elapsed_since_boot)
             state_module.save(state_ref[0])
             disconnect_wifi(wlan)
             enter_deepsleep(sensor_pin)
