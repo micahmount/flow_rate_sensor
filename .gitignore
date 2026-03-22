@@ -11,5 +11,4 @@ mosquitto/config/mosquitto.passwd
 venv
 .venv
 
-# Device state file - do not commit
-flow_state.json
+

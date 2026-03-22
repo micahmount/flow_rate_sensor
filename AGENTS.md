@@ -2,22 +2,29 @@
 
 ## Testing
 
-**Host tests** (`tests/test_calculations.py`):
-- Pure functions only (calculations, state persistence)
-- Run with: `.venv/bin/pytest tests/`
+**All tests require the ESP32 device connected to `/dev/ttyUSB0`.**
 
-**Device tests** (hardware integration):
-- Requires ESP32 connected to `/dev/ttyUSB0`
-- Tests run on-device via mpremote
-- See `tests/test_device.py` for device test template
+Deploy and run tests on the device:
 
-### Manual Testing
+```bash
+# Deploy all files
+mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
+mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
+mpremote connect /dev/ttyUSB0 fs cp state.py :state.py
+mpremote connect /dev/ttyUSB0 fs cp mqtt.py :mqtt.py
+mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
+mpremote connect /dev/ttyUSB0 fs cp tests/test_device.py :test_device.py
 
-Hardware integration (WiFi, MQTT, deepsleep):
-1. Deploy: `mpremote connect /dev/ttyUSB0 fs cp main.py :main.py`
-2. Reset: `mpremote connect /dev/ttyUSB0 reset`
-3. Watch serial output
-4. Check Home Assistant for MQTT entities
+# Run tests on device
+mpremote connect /dev/ttyUSB0 run test_device.py
+
+# Clean up
+mpremote connect /dev/ttyUSB0 fs rm :test_device.py
+```
+
+Tests cover: flow rate calculations, keg math, MQTT payload, state persistence,
+state transitions (on_reset, on_wake_command, on_pulse, on_publish, on_sleep_tick),
+and predicates (should_publish, should_sleep).
 
 ---
 
@@ -39,10 +46,11 @@ This project uses **mpremote** for deployment:
 # Install mpremote
 .venv/bin/pip install mpremote
 
-# Deploy main.py
+# Deploy all files
 mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
-
-# Copy secrets.py
+mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
+mpremote connect /dev/ttyUSB0 fs cp state.py :state.py
+mpremote connect /dev/ttyUSB0 fs cp mqtt.py :mqtt.py
 mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
 
 # Reset the device

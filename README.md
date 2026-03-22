@@ -226,7 +226,7 @@ mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
 mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
 
 # (Optional) Deploy fresh state file
-mpremote connect /dev/ttyUSB0 fs cp flow_state.json.example :flow_state.json
+mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json
 ```
 
 ### Step 3 — (Optional) Enable WebREPL
@@ -519,7 +519,7 @@ This can happen if the keg was tapped when already partially empty and then rese
 The sensor's calibration constant (450 pulses per liter) is nominal. If you want higher accuracy, you can calibrate it yourself by pouring a known volume (e.g. exactly 1 liter into a measuring jug) and adjusting the `PULSES_PER_LITER` constant in `main.py` based on the actual pulse count observed.
 
 **State not persisting across deepsleep**
-The state file (`/flow_state.json`) must exist on the device. If the device was never deployed with a state file, create one: `mpremote connect /dev/ttyUSB0 fs cp flow_state.json.example :flow_state.json`
+The state file (`/flow_state.json`) must exist on the device. If the device was never deployed with a state file, deploy it: `mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json`
 
 **Device shows offline in Home Assistant**
 This is expected behavior — the device is in deepsleep most of the time. It only appears online briefly (~2 seconds) when it wakes to publish. Use the MQTT wake button to keep it online for 5 minutes.
@@ -533,7 +533,7 @@ This is expected behavior — the device is in deepsleep most of the time. It on
 | `main.py` | Main ESP32 firmware — deploy as `main.py` on the device |
 | `calculations.py` | Pure functions for flow rate, keg calculations, state persistence |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
-| `flow_state.json.example` | State file template — deploy to device for fresh start |
+| `flow_state.json` | Persisted device state — deploy to device for a fresh start |
 | `tests/` | Host tests for `calculations.py` (run with `pytest tests/`) |
 | `mosquitto/` | Docker Compose config for Mosquitto broker — copy to Docker host and run |
 | `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with Bar Card (requires HACS) |
