@@ -84,6 +84,20 @@ def log(msg):
     print(f"[{ts}] {msg}")
 
 
+def human_duration(ms):
+    """Convert milliseconds to human-readable string like '4m 30s'."""
+    total_seconds = ms // 1000
+    if total_seconds >= 3600:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
+    if total_seconds >= 60:
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}m {seconds}s"
+    return f"{total_seconds}s"
+
+
 def log_boot(state):
     if state["stay_awake"] > 0:
         log(f"Boot — wake mode, staying awake for {state['stay_awake']}s")
@@ -136,7 +150,7 @@ def disconnect_wifi(wlan):
 
 def enter_deepsleep(sensor_pin):
     esp32.wake_on_ext0(pin=sensor_pin, level=esp32.WAKEUP_ALL_LOW)
-    log(f"Entering deepsleep for {SLEEP_INTERVAL}ms...")
+    log(f"Entering deepsleep for {human_duration(SLEEP_INTERVAL)}...")
     time.sleep_ms(100)
     deepsleep(SLEEP_INTERVAL)
 
@@ -228,6 +242,7 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
             f"remaining: {keg_remaining}L ({keg_percent}%)")
         mqtt_module.listen(client, COMMAND_LISTEN_SECONDS)
         client.publish(MQTT_CONFIG["topic_wake"], b"", retain=True)
+        client.publish(MQTT_CONFIG["topic_reset"], b"", retain=True)
     except Exception as e:
         log(f"MQTT error: {e}")
 

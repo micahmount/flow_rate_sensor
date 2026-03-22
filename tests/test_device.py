@@ -18,6 +18,31 @@ def assert_eq(label, actual, expected):
     print(f"PASS: {label}")
 
 
+# ─── Human Duration ──────────────────────────────────────────────────────────
+
+def human_duration(ms):
+    total_seconds = ms // 1000
+    if total_seconds >= 3600:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
+    if total_seconds >= 60:
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}m {seconds}s"
+    return f"{total_seconds}s"
+
+print("\n=== Human Duration ===")
+
+assert_eq("270000ms = 4m 30s", human_duration(270000), "4m 30s")
+assert_eq("60000ms = 1m 0s", human_duration(60000), "1m 0s")
+assert_eq("30000ms = 30s", human_duration(30000), "30s")
+assert_eq("1000ms = 1s", human_duration(1000), "1s")
+assert_eq("3600000ms = 1h 0m", human_duration(3600000), "1h 0m")
+assert_eq("7500000ms = 2h 5m", human_duration(7500000), "2h 5m")
+assert_eq("90000ms = 1m 30s", human_duration(90000), "1m 30s")
+
+
 # ─── calculations.py ──────────────────────────────────────────────────────────
 
 print("\n=== Flow Rate ===")

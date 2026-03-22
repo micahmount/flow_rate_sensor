@@ -141,6 +141,7 @@ def publish_discovery(client, config):
                 "unique_id":        "flow_sensor_reset",
                 "command_topic":    config["topic_reset"].decode(),
                 "payload_press":    "RESET",
+                "retain":           True,
                 "device":           device,
             },
         ),
