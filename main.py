@@ -83,6 +83,22 @@ def log(msg):
     ts = f"{t[0]}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
     print(f"[{ts}] {msg}")
 
+
+def log_boot(state):
+    if state["stay_awake"] > 0:
+        log(f"Boot — wake mode, staying awake for {state['stay_awake']}s")
+    else:
+        log("Boot — deepsleep, will sleep after publish")
+    log(f"  dispensed={state['keg_dispensed']}L, "
+        f"pulses={state['total_pulses']}")
+
+
+def log_wake_mode(state):
+    if state["stay_awake"] == WAKE_TIMEOUT_SECONDS:
+        log(f"Wake mode active — staying awake for {WAKE_TIMEOUT_SECONDS}s")
+    elif state["stay_awake"] % 30 == 0 and state["stay_awake"] > 0:
+        log(f"Wake mode — {state['stay_awake']}s remaining")
+
 # ─── WiFi ─────────────────────────────────────────────────────────────────────
 
 def connect_wifi():
@@ -124,6 +140,31 @@ def enter_deepsleep(sensor_pin):
     time.sleep_ms(100)
     deepsleep(SLEEP_INTERVAL)
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def boot_init():
+    """Initialize hardware, WiFi, and WebREPL. Returns (sensor_pin, wlan, boot_time)."""
+    sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
+    sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
+    boot_time = time.time()
+    wlan = connect_wifi()
+    if wlan is not None:
+        try:
+            webrepl.start()
+            log(f"WebREPL at ws://{wlan.ifconfig()[0]}:8266")
+        except Exception:
+            pass
+    return sensor_pin, wlan, boot_time
+
+
+def wait_minimum_window(boot_time):
+    """Sleep for any remaining time to enforce MINIMUM_AWAKE_SECONDS per cycle."""
+    elapsed = time.time() - boot_time
+    if elapsed < MINIMUM_AWAKE_SECONDS:
+        remaining = MINIMUM_AWAKE_SECONDS - elapsed
+        log(f"Waiting {remaining:.0f}s minimum awake window...")
+        time.sleep(remaining)
+
 # ─── MQTT Callback ────────────────────────────────────────────────────────────
 
 def make_callback(get_state, set_state):
@@ -143,103 +184,100 @@ def make_callback(get_state, set_state):
         set_state(s)
     return callback
 
+# ─── Publish Cycle ────────────────────────────────────────────────────────────
+
+def publish_cycle(state_ref, wlan, callback, discovery_done, now):
+    """
+    Accumulate pulses, compute payload, publish to MQTT, listen for commands,
+    clear retained wake message. Returns updated discovery_done.
+    """
+    global pulse_count
+    state = state_ref[0]
+
+    # Snapshot + reset pulse_count, accumulate into state
+    count = pulse_count
+    pulse_count = 0
+    state = state_module.on_pulse(state, count, PULSES_PER_LITER)
+    state_ref[0] = state
+
+    # Compute derived values and payload
+    elapsed = now - state["last_publish"] if state["last_publish"] else PUBLISH_INTERVAL
+    flow_rate = min(
+        calculations.calculate_flow_rate(count, elapsed, PULSES_PER_LITER),
+        MAX_FLOW_RATE
+    )
+    total_volume = round(state["total_pulses"] / PULSES_PER_LITER, 3)
+    keg_remaining = calculations.calculate_keg_remaining(state["keg_dispensed"], KEG_VOLUME_LITERS)
+    keg_percent = calculations.calculate_keg_percent(keg_remaining, KEG_VOLUME_LITERS)
+    payload = calculations.build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent)
+
+    # Connect MQTT — fail fast, skip publish if connect fails
+    try:
+        client = mqtt_module.connect(MQTT_CONFIG, callback)
+    except Exception as e:
+        log(f"MQTT connect failed: {e}")
+        return discovery_done
+
+    # Publish + listen + clear retained — separate scope from connect
+    try:
+        if not discovery_done:
+            mqtt_module.publish_discovery(client, MQTT_CONFIG)
+            discovery_done = True
+        mqtt_module.publish_state(client, payload, MQTT_CONFIG)
+        log(f"Published — flow: {flow_rate} L/min | "
+            f"remaining: {keg_remaining}L ({keg_percent}%)")
+        mqtt_module.listen(client, COMMAND_LISTEN_SECONDS)
+        client.publish(MQTT_CONFIG["topic_wake"], b"", retain=True)
+    except Exception as e:
+        log(f"MQTT error: {e}")
+
+    # Always disconnect — not wrapped in try/except
+    mqtt_module.disconnect(client)
+
+    # Record publish time and persist
+    state_ref[0] = state_module.on_publish(state_ref[0], now)
+    state_module.save(state_ref[0])
+    return discovery_done
+
+# ─── Sleep/Tick ───────────────────────────────────────────────────────────────
+
+def sleep_or_tick(state_ref, wlan, boot_time, sensor_pin):
+    """Either enter deepsleep or decrement stay_awake and sleep 1s."""
+    current = state_ref[0]
+
+    if state_module.should_sleep(current):
+        wait_minimum_window(boot_time)
+        state_module.save(current)
+        disconnect_wifi(wlan)
+        enter_deepsleep(sensor_pin)
+    else:
+        log_wake_mode(current)
+        state_ref[0] = state_module.on_sleep_tick(current)
+        time.sleep(1)
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     global pulse_count
 
-    # Hardware init — must happen before any path that calls enter_deepsleep
-    sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
-    sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
-
-    boot_time = time.time()
-
-    # Load persisted state
+    sensor_pin, wlan, boot_time = boot_init()
     state = state_module.load()
-    log(f"Boot — dispensed={state['keg_dispensed']}L, "
-        f"pulses={state['total_pulses']}, stay_awake={state['stay_awake']}")
-
-    # Connect WiFi and start WebREPL
-    wlan = connect_wifi()
-    if wlan is not None:
-        try:
-            webrepl.start()
-            log(f"WebREPL at ws://{wlan.ifconfig()[0]}:8266")
-        except Exception as e:
-            log("WebREPL error: " + str(e))
+    log_boot(state)
 
     discovery_done = False
-
-    # State accessors for MQTT callback closure
-    # Using a single-element list so the closure can rebind state
     state_ref = [state]
 
-    def get_state():
-        return state_ref[0]
-
-    def set_state(s):
+    def update_state(s):
         state_ref[0] = s
         state_module.save(s)
 
+    callback = make_callback(lambda: state_ref[0], update_state)
+
     while True:
-        state = state_ref[0]
         now = time.time()
-
-        if state_module.should_publish(state, now, PUBLISH_INTERVAL):
-            # Accumulate ISR pulses into state, reset global
-            count = pulse_count
-            pulse_count = 0
-            state = state_module.on_pulse(state, count, PULSES_PER_LITER)
-            state_ref[0] = state
-
-            # Compute derived values
-            elapsed = now - state["last_publish"] if state["last_publish"] else PUBLISH_INTERVAL
-            flow_rate = min(
-                calculations.calculate_flow_rate(count, elapsed, PULSES_PER_LITER),
-                MAX_FLOW_RATE
-            )
-            total_volume  = round(state["total_pulses"] / PULSES_PER_LITER, 3)
-            keg_remaining = calculations.calculate_keg_remaining(
-                state["keg_dispensed"], KEG_VOLUME_LITERS
-            )
-            keg_percent = calculations.calculate_keg_percent(keg_remaining, KEG_VOLUME_LITERS)
-            payload = calculations.build_mqtt_payload(
-                flow_rate, total_volume, keg_remaining, keg_percent
-            )
-
-            # Connect, publish, listen, disconnect
-            try:
-                client = mqtt_module.connect(MQTT_CONFIG, make_callback(get_state, set_state))
-                if not discovery_done:
-                    mqtt_module.publish_discovery(client, MQTT_CONFIG)
-                    discovery_done = True
-                mqtt_module.publish_state(client, payload, MQTT_CONFIG)
-                log(f"Published — flow: {flow_rate} L/min | "
-                    f"remaining: {keg_remaining}L ({keg_percent}%)")
-                mqtt_module.listen(client, COMMAND_LISTEN_SECONDS)
-                # Clear any retained wake command so it doesn't fire again next cycle
-                client.publish(MQTT_CONFIG["topic_wake"], b"", retain=True)
-                mqtt_module.disconnect(client)
-            except Exception as e:
-                log("MQTT error: " + str(e))
-
-            # Record publish time and persist
-            state = state_module.on_publish(state_ref[0], now)
-            set_state(state)
-
-        # Sleep or tick
-        if state_module.should_sleep(state_ref[0]):
-            # Ensure device is awake for at least 30 seconds per cycle
-            elapsed_since_boot = time.time() - boot_time
-            if elapsed_since_boot < 30:
-                time.sleep(30 - elapsed_since_boot)
-            state_module.save(state_ref[0])
-            disconnect_wifi(wlan)
-            enter_deepsleep(sensor_pin)
-        else:
-            state = state_module.on_sleep_tick(state_ref[0])
-            set_state(state)
-            time.sleep(1)
+        if state_module.should_publish(state_ref[0], now, PUBLISH_INTERVAL):
+            discovery_done = publish_cycle(state_ref, wlan, callback, discovery_done, now)
+        sleep_or_tick(state_ref, wlan, boot_time, sensor_pin)
 
 if __name__ == "__main__":
     main()
