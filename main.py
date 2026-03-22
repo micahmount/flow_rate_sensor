@@ -1,123 +1,127 @@
 # Gredia 1/4" Hall Effect Flow Sensor — ESP32 MicroPython
-# This is main.py - the primary script that runs on the ESP32 device
-# Publishes flow rate (L/min) and total volume (L) to Home Assistant via MQTT
+# Publishes flow rate and keg level to Home Assistant via MQTT.
 #
 # Wiring:
-#   Red    → 3.3V or 5V
+#   Red    → 3.3V (or 5V)
 #   Black  → GND
 #   Yellow → GPIO 4
 
-import network
 import time
+import network
 import ntptime
 import webrepl
 import esp32
-from machine import Pin, lightsleep
-from umqtt.simple import MQTTClient
-import ujson
+from machine import Pin, deepsleep
+import calculations
+import state as state_module
+import mqtt as mqtt_module
 try:
     import secrets
-except ImportError:
-    raise ImportError("secrets.py not found. Copy secrets.py.example to secrets.py and configure.")
+except ImportError as exc:
+    raise ImportError("Copy secrets.py.example to secrets.py and configure.") from exc
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-WIFI_SSID     = secrets.WIFI_SSID
-WIFI_PASSWORD = secrets.WIFI_PASSWORD
+FLOW_PIN              = 4
+PULSES_PER_LITER      = 98        # F = 98 * Q per datasheet (pulses/liter/minute)
+KEG_VOLUME_LITERS     = 18.93     # 5 US gallon corny keg
+PUBLISH_INTERVAL      = 30        # seconds between publishes
+SLEEP_INTERVAL        = 270000    # ms (4.5 minutes)
+WAKE_TIMEOUT_SECONDS  = 300       # seconds to stay awake after wake command
+COMMAND_LISTEN_SECONDS = 5        # seconds to listen for HA commands after publish
+MINIMUM_AWAKE_SECONDS = 30        # minimum time device stays awake per cycle
+TIMEZONE_BASE         = -8 * 3600 # PST (UTC-8)
+DEBOUNCE_MS           = 50
+MIN_PULSE_MS          = 2
+MAX_FLOW_RATE         = 30        # L/min sanity cap
 
-MQTT_BROKER   = secrets.MQTT_BROKER
-MQTT_PORT     = secrets.MQTT_PORT
-MQTT_USER     = secrets.MQTT_USER
-MQTT_PASSWORD = secrets.MQTT_PASSWORD
-MQTT_CLIENT_ID = secrets.MQTT_CLIENT_ID
+MQTT_CONFIG = {
+    "client_id":          secrets.MQTT_CLIENT_ID,
+    "broker":             secrets.MQTT_BROKER,
+    "port":               secrets.MQTT_PORT,
+    "user":               secrets.MQTT_USER,
+    "password":           secrets.MQTT_PASSWORD,
+    "topic_state":        b"home/flow_sensor/state",
+    "topic_availability": b"home/flow_sensor/availability",
+    "topic_reset":        b"home/flow_sensor/reset",
+    "topic_wake":         b"home/flow_sensor/wake",
+}
 
-# MQTT topics
-TOPIC_STATE        = b"home/flow_sensor/state"
-TOPIC_AVAILABILITY = b"home/flow_sensor/availability"
-TOPIC_RESET        = b"home/flow_sensor/reset"
-TOPIC_WAKE         = b"home/flow_sensor/wake"
+# ─── ISR Global ───────────────────────────────────────────────────────────────
 
-# WebREPL configured via webrepl_setup
-
-# Keg
-KEG_VOLUME_LITERS  = 18.93  # 5 US gallons
-
-# Sensor
-FLOW_PIN          = 4       # GPIO pin connected to yellow wire
-PULSES_PER_LITER  = 450     # pulses per liter (calibrate: 450 is common for these sensors)
-PUBLISH_INTERVAL  = 30      # seconds between MQTT publishes (battery saver)
-SLEEP_INTERVAL    = 270000  # ms to sleep between cycles (4.5 minutes)
-WAKE_TIMEOUT_SECONDS = 300  # stay awake for 5 minutes after wake command
-TIMEZONE_BASE    = -8 * 60 * 60  # base timezone offset in seconds (e.g., -8 for PST)
-DEBOUNCE_MS       = 50      # debounce time in milliseconds (increased to prevent false triggers)
-MAX_FLOW_RATE     = 30      # maximum possible flow rate in L/min (sanity check)
-MIN_PULSE_MS      = 2       # minimum time between valid pulses (physical limit of sensor)
-
-# ─── Globals ──────────────────────────────────────────────────────────────────
-
+# pulse_count is written by the ISR — kept as a plain global for safe ISR access.
+# It is accumulated into state on every publish cycle then reset to 0.
 pulse_count     = 0
-total_pulses    = 0
-keg_dispensed   = 0.0
-last_publish    = 0
 last_pulse_time = 0
-prev_count      = 0
-flow_detected   = False
-wlan            = None
-client          = None
-discovery_done  = False
-wake_timeout    = 0
 
-# ─── Interrupt handler ────────────────────────────────────────────────────────
+# ─── Interrupt Handler ────────────────────────────────────────────────────────
 
-def get_timezone_offset():
-    t = time.localtime()
-    month = t[1]
-    if month >= 4 and month <= 10:
-        return TIMEZONE_BASE + 3600  # DST: add 1 hour
-    return TIMEZONE_BASE
+def pulse_handler(pin):
+    global pulse_count, last_pulse_time
+    now = time.ticks_ms()
+    pulse_diff = time.ticks_diff(now, last_pulse_time)
+
+    if pulse_diff < MIN_PULSE_MS:
+        return
+    if pulse_diff < DEBOUNCE_MS:
+        return
+
+    # Reject physically impossible flow rates
+    inst_flow = (1 / (pulse_diff / 1000)) * 60 / PULSES_PER_LITER
+    if inst_flow > MAX_FLOW_RATE:
+        return
+
+    last_pulse_time = now
+    pulse_count += 1
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
 
 def log(msg):
-    t = time.localtime(time.time() + get_timezone_offset())
+    t = time.localtime()
+    tz_offset = calculations.get_timezone_offset(t[1], TIMEZONE_BASE)
+    t = time.localtime(time.time() + tz_offset)
     ts = f"{t[0]}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
     print(f"[{ts}] {msg}")
 
-def pulse_handler(pin):
-    global pulse_count, total_pulses, last_pulse_time, flow_detected
-    now = time.ticks_ms()
-    
-    # Validate timing between pulses
-    pulse_diff = time.ticks_diff(now, last_pulse_time)
-    if pulse_diff < MIN_PULSE_MS:  # Physically impossible, must be noise
-        return
-    if pulse_diff < DEBOUNCE_MS:   # Within debounce window
-        return
-        
-    # Calculate instantaneous flow rate for validation
-    # flow = (1 pulse / time_diff_seconds) * (60 seconds/minute) * (1 liter/PULSES_PER_LITER)
-    inst_flow_rate = (1 / (pulse_diff / 1000)) * 60 / PULSES_PER_LITER
-    
-    # Reject physically impossible flow rates
-    if inst_flow_rate > MAX_FLOW_RATE:
-        return
-        
-    last_pulse_time = now
-    pulse_count  += 1
-    total_pulses += 1
-    flow_detected = True  # Set flag to wake from sleep
+
+def human_duration(ms):
+    """Convert milliseconds to human-readable string like '4m 30s'."""
+    total_seconds = ms // 1000
+    if total_seconds >= 3600:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
+    if total_seconds >= 60:
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}m {seconds}s"
+    return f"{total_seconds}s"
+
+
+def log_boot(state):
+    if state["stay_awake"] > 0:
+        log(f"Boot — wake mode, staying awake for {state['stay_awake']}s")
+    else:
+        log("Boot — deepsleep, will sleep after publish")
+    log(f"  dispensed={state['keg_dispensed']}L, "
+        f"pulses={state['total_pulses']}")
+
+
+def log_wake_mode(state):
+    if state["stay_awake"] == WAKE_TIMEOUT_SECONDS:
+        log(f"Wake mode active — staying awake for {WAKE_TIMEOUT_SECONDS}s")
+    elif state["stay_awake"] % 30 == 0 and state["stay_awake"] > 0:
+        log(f"Wake mode — {state['stay_awake']}s remaining")
 
 # ─── WiFi ─────────────────────────────────────────────────────────────────────
 
 def connect_wifi():
-    global wlan
-    if wlan is not None and wlan.isconnected():
-        return wlan
-        
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.config(pm=0)
     if not wlan.isconnected():
         log("Connecting to WiFi...")
-        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+        wlan.connect(secrets.WIFI_SSID, secrets.WIFI_PASSWORD)
         for _ in range(20):
             if wlan.isconnected():
                 break
@@ -126,276 +130,169 @@ def connect_wifi():
         log("WiFi connected: " + wlan.ifconfig()[0])
         try:
             ntptime.settime()
-            log("NTP time synced")
+            log("NTP synced")
         except Exception as e:
-            log("NTP sync failed: " + str(e))
+            log("NTP failed: " + str(e))
         return wlan
+    log("WiFi failed")
+    return None
+
+
+def disconnect_wifi(wlan):
+    if wlan is not None:
+        try:
+            wlan.disconnect()
+            wlan.active(False)
+        except Exception:
+            pass
+
+# ─── Deepsleep ────────────────────────────────────────────────────────────────
+
+def enter_deepsleep(sensor_pin):
+    esp32.wake_on_ext0(pin=sensor_pin, level=esp32.WAKEUP_ALL_LOW)
+    log(f"Entering deepsleep for {human_duration(SLEEP_INTERVAL)}...")
+    time.sleep_ms(100)
+    deepsleep(SLEEP_INTERVAL)
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def boot_init():
+    """Initialize hardware, WiFi, and WebREPL. Returns (sensor_pin, wlan, boot_time)."""
+    sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
+    sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
+    boot_time = time.time()
+    wlan = connect_wifi()
+    if wlan is not None:
+        try:
+            webrepl.start()
+            log(f"WebREPL at ws://{wlan.ifconfig()[0]}:8266")
+        except Exception:
+            pass
+    return sensor_pin, wlan, boot_time
+
+
+def wait_minimum_window(boot_time):
+    """Sleep for any remaining time to enforce MINIMUM_AWAKE_SECONDS per cycle."""
+    elapsed = time.time() - boot_time
+    if elapsed < MINIMUM_AWAKE_SECONDS:
+        remaining = MINIMUM_AWAKE_SECONDS - elapsed
+        log(f"Waiting {remaining:.0f}s minimum awake window...")
+        time.sleep(remaining)
+
+# ─── MQTT Callback ────────────────────────────────────────────────────────────
+
+def make_callback(get_state, set_state):
+    """
+    Returns an MQTT callback that closes over state accessors.
+    get_state() returns current state dict.
+    set_state(s) replaces state with new dict and persists it.
+    """
+    def callback(topic, msg):
+        s = get_state()
+        if topic == MQTT_CONFIG["topic_reset"]:
+            s = state_module.on_reset(s)
+            log("Keg reset")
+        elif topic == MQTT_CONFIG["topic_wake"]:
+            s = state_module.on_wake_command(s, WAKE_TIMEOUT_SECONDS)
+            log(f"Wake command — staying awake for {WAKE_TIMEOUT_SECONDS}s")
+        set_state(s)
+    return callback
+
+# ─── Publish Cycle ────────────────────────────────────────────────────────────
+
+def publish_cycle(state_ref, wlan, callback, discovery_done, now):
+    """
+    Accumulate pulses, compute payload, publish to MQTT, listen for commands,
+    clear retained wake message. Returns updated discovery_done.
+    """
+    global pulse_count
+    state = state_ref[0]
+
+    # Snapshot + reset pulse_count, accumulate into state
+    count = pulse_count
+    pulse_count = 0
+    state = state_module.on_pulse(state, count, PULSES_PER_LITER)
+    state_ref[0] = state
+
+    # Compute derived values and payload
+    elapsed = now - state["last_publish"] if state["last_publish"] else PUBLISH_INTERVAL
+    flow_rate = min(
+        calculations.calculate_flow_rate(count, elapsed, PULSES_PER_LITER),
+        MAX_FLOW_RATE
+    )
+    total_volume = round(state["total_pulses"] / PULSES_PER_LITER, 3)
+    keg_remaining = calculations.calculate_keg_remaining(state["keg_dispensed"], KEG_VOLUME_LITERS)
+    keg_percent = calculations.calculate_keg_percent(keg_remaining, KEG_VOLUME_LITERS)
+    payload = calculations.build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent)
+
+    # Connect MQTT — fail fast, skip publish if connect fails
+    try:
+        client = mqtt_module.connect(MQTT_CONFIG, callback)
+    except Exception as e:
+        log(f"MQTT connect failed: {e}")
+        return discovery_done
+
+    # Publish + listen + clear retained — separate scope from connect
+    try:
+        if not discovery_done:
+            mqtt_module.publish_discovery(client, MQTT_CONFIG)
+            discovery_done = True
+        mqtt_module.publish_state(client, payload, MQTT_CONFIG)
+        log(f"Published — flow: {flow_rate} L/min | "
+            f"remaining: {keg_remaining}L ({keg_percent}%)")
+        mqtt_module.listen(client, COMMAND_LISTEN_SECONDS)
+        client.publish(MQTT_CONFIG["topic_wake"], b"", retain=True)
+        client.publish(MQTT_CONFIG["topic_reset"], b"", retain=True)
+    except Exception as e:
+        log(f"MQTT error: {e}")
+
+    # Always disconnect — not wrapped in try/except
+    mqtt_module.disconnect(client)
+
+    # Record publish time and persist
+    state_ref[0] = state_module.on_publish(state_ref[0], now)
+    state_module.save(state_ref[0])
+    return discovery_done
+
+# ─── Sleep/Tick ───────────────────────────────────────────────────────────────
+
+def sleep_or_tick(state_ref, wlan, boot_time, sensor_pin):
+    """Either enter deepsleep or decrement stay_awake and sleep 1s."""
+    current = state_ref[0]
+
+    if state_module.should_sleep(current):
+        wait_minimum_window(boot_time)
+        state_module.save(current)
+        disconnect_wifi(wlan)
+        enter_deepsleep(sensor_pin)
     else:
-        log("WiFi connection failed, retrying...")
-        return None
-
-# ─── MQTT ─────────────────────────────────────────────────────────────────────
-
-def connect_mqtt():
-    client = MQTTClient(
-        MQTT_CLIENT_ID,
-        MQTT_BROKER,
-        port=MQTT_PORT,
-        user=MQTT_USER,
-        password=MQTT_PASSWORD,
-        keepalive=60
-    )
-    client.set_last_will(TOPIC_AVAILABILITY, b"offline", retain=True)
-    client.set_callback(mqtt_callback)
-    client.connect()
-    client.subscribe(TOPIC_RESET)
-    client.subscribe(TOPIC_WAKE)
-    client.publish(TOPIC_AVAILABILITY, b"online", retain=True)
-    log("MQTT connected")
-    return client
-
-def mqtt_callback(topic, msg):
-    global keg_dispensed, wake_timeout
-    if topic == TOPIC_RESET:
-        keg_dispensed = 0.0
-        log("Keg reset to full (18.93 L)")
-    elif topic == TOPIC_WAKE:
-        wake_timeout = WAKE_TIMEOUT_SECONDS
-        log("Wake command received, staying awake for " + str(WAKE_TIMEOUT_SECONDS) + "s")
-
-def publish_discovery(client):
-    """
-    Publish Home Assistant MQTT auto-discovery messages.
-    Call once on startup — HA will automatically create two sensor entities.
-    """
-    device = {
-        "identifiers": ["esp32_flow_sensor"],
-        "name": "Water Flow Sensor",
-        "model": "Gredia 1/4\" Hall Effect",
-        "manufacturer": "Gredia"
-    }
-
-    # Flow rate sensor
-    rate_config = {
-        "name": "Flow Rate",
-        "unique_id": "water_flow_rate",
-        "state_topic": TOPIC_STATE.decode(),
-        "availability_topic": TOPIC_AVAILABILITY.decode(),
-        "value_template": "{{ value_json.flow_rate }}",
-        "unit_of_measurement": "L/min",
-        "device_class": "volume_flow_rate",
-        "state_class": "measurement",
-        "icon": "mdi:water-pump",
-        "force_update": True,
-        "device": device
-    }
-
-    # Total volume sensor
-    volume_config = {
-        "name": "Dispensed",
-        "unique_id": "water_total_volume",
-        "state_topic": TOPIC_STATE.decode(),
-        "availability_topic": TOPIC_AVAILABILITY.decode(),
-        "value_template": "{{ value_json.total_volume }}",
-        "unit_of_measurement": "L",
-        "device_class": "water",
-        "state_class": "total_increasing",
-        "icon": "mdi:water",
-        "force_update": True,
-        "device": device
-    }
-
-    # Keg level sensor
-    keg_config = {
-        "name": "Keg Level",
-        "unique_id": "keg_level",
-        "state_topic": TOPIC_STATE.decode(),
-        "availability_topic": TOPIC_AVAILABILITY.decode(),
-        "value_template": "{{ value_json.keg_percent }}",
-        "unit_of_measurement": "%",
-        "state_class": "measurement",
-        "icon": "mdi:beer",
-        "force_update": True,
-        "device": device
-    }
-
-    # Keg remaining (liters)
-    keg_liters_config = {
-        "name": "Remaining",
-        "unique_id": "keg_remaining",
-        "state_topic": TOPIC_STATE.decode(),
-        "availability_topic": TOPIC_AVAILABILITY.decode(),
-        "value_template": "{{ value_json.keg_remaining }}",
-        "unit_of_measurement": "L",
-        "device_class": "water",
-        "state_class": "measurement",
-        "icon": "mdi:beer-outline",
-        "force_update": True,
-        "device": device
-    }
-
-    client.publish(
-        b"homeassistant/sensor/flow_sensor/keg_level/config",
-        ujson.dumps(keg_config).encode(),
-        retain=True
-    )
-    client.publish(
-        b"homeassistant/sensor/flow_sensor/keg_remaining/config",
-        ujson.dumps(keg_liters_config).encode(),
-        retain=True
-    )
-    client.publish(
-        b"homeassistant/sensor/flow_sensor/flow_rate/config",
-        ujson.dumps(rate_config).encode(),
-        retain=True
-    )
-    client.publish(
-        b"homeassistant/sensor/flow_sensor/total_volume/config",
-        ujson.dumps(volume_config).encode(),
-        retain=True
-    )
-
-    # Wake button
-    wake_config = {
-        "name": "Flow Sensor Wake",
-        "unique_id": "flow_sensor_wake",
-        "command_topic": TOPIC_WAKE.decode(),
-        "payload_press": "WAKE",
-        "device": device
-    }
-    client.publish(
-        b"homeassistant/button/flow_sensor_wake/config",
-        ujson.dumps(wake_config).encode(),
-        retain=True
-    )
-    log("Auto-discovery published to Home Assistant")
+        log_wake_mode(current)
+        state_ref[0] = state_module.on_sleep_tick(current)
+        time.sleep(1)
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global pulse_count, last_publish, keg_dispensed, total_pulses, last_pulse_time, prev_count, wlan, client, discovery_done, flow_detected, wake_timeout
+    global pulse_count
 
-    # Set up sensor pin with interrupt
-    sensor_pin = Pin(FLOW_PIN, Pin.IN, Pin.PULL_UP)
-    sensor_pin.irq(trigger=Pin.IRQ_RISING, handler=pulse_handler)
-    
-    # Configure GPIO wake from lightsleep - wake on LOW (sensor pulls low when active)
-    esp32.wake_on_ext0(pin=sensor_pin, level=esp32.WAKEUP_ALL_LOW)
+    sensor_pin, wlan, boot_time = boot_init()
+    state = state_module.load()
+    log_boot(state)
 
-    # Initialize WiFi and WebREPL
-    wlan = connect_wifi()
-    if wlan is not None:
-        # Start WebREPL
-        try:
-            webrepl.start()
-            log(f"WebREPL started at ws://{wlan.ifconfig()[0]}:8266")
-        except Exception as e:
-            log("WebREPL error: " + str(e))
-
-    client = None
     discovery_done = False
-    
-    # Initialize last_publish to ensure first loop publishes
-    if last_publish == 0:
-        last_publish = time.time() - PUBLISH_INTERVAL
+    state_ref = [state]
+
+    def update_state(s):
+        state_ref[0] = s
+        state_module.save(s)
+
+    callback = make_callback(lambda: state_ref[0], update_state)
 
     while True:
-        try:
-            now = time.time()
-            elapsed = now - last_publish
+        now = time.time()
+        if state_module.should_publish(state_ref[0], now, PUBLISH_INTERVAL):
+            discovery_done = publish_cycle(state_ref, wlan, callback, discovery_done, now)
+        sleep_or_tick(state_ref, wlan, boot_time, sensor_pin)
 
-            # Check if there's flow happening
-            current_count = pulse_count
-            has_flow = current_count > prev_count
-            prev_count = current_count
-
-            # Publish if interval reached OR if flow just started
-            should_publish = elapsed >= PUBLISH_INTERVAL or (has_flow and elapsed >= 5)
-            
-            if should_publish:
-                log(f"Attempting publish... elapsed={elapsed:.1f}s, has_flow={has_flow}")
-                # Connect WiFi
-                wlan = connect_wifi()
-                if wlan is None:
-                    time.sleep(5)
-                    continue
-
-                # Connect MQTT
-                try:
-                    client = connect_mqtt()
-                    if not discovery_done:
-                        publish_discovery(client)
-                        discovery_done = True
-                except Exception as e:
-                    log("MQTT connection failed: " + str(e))
-                    client = None
-                    time.sleep(5)
-                    continue
-
-                # Check for reset command before publishing
-                client.check_msg()
-
-                # Snapshot and reset interval pulse count
-                count = pulse_count
-                pulse_count = 0
-                last_publish = now
-                prev_count = 0
-
-                # Flow rate: (pulses / elapsed_seconds) * 60 / PULSES_PER_LITER = L/min
-                # Sanity check the elapsed time to prevent division by very small numbers
-                if elapsed < 0.1:  # Less than 100ms is too short for accurate measurement
-                    flow_rate = 0
-                else:
-                    flow_rate = round((count / elapsed) * 60 / PULSES_PER_LITER, 3)
-                    flow_rate = min(flow_rate, MAX_FLOW_RATE)  # Cap at physical maximum
-
-                # Track how much has been dispensed from this keg
-                liters_this_interval = round(count / PULSES_PER_LITER, 4)
-                keg_dispensed       += liters_this_interval
-                total_volume         = round(total_pulses / PULSES_PER_LITER, 3)
-
-                keg_remaining = round(max(KEG_VOLUME_LITERS - keg_dispensed, 0), 3)
-                keg_percent   = round((keg_remaining / KEG_VOLUME_LITERS) * 100, 1)
-
-                payload = ujson.dumps({
-                    "flow_rate":     flow_rate,
-                    "total_volume":  total_volume,
-                    "keg_remaining": keg_remaining,
-                    "keg_percent":   keg_percent
-                })
-
-                try:
-                    client.publish(TOPIC_STATE, payload.encode())
-                    log(f"Published → flow: {flow_rate} L/min | dispensed: {total_volume}L | remaining: {keg_remaining}L ({keg_percent}%)")
-                except Exception as e:
-                    log("MQTT publish error: " + str(e))
-
-                # Disconnect MQTT but keep WiFi for WebREPL
-                if client is not None:
-                    try:
-                        client.disconnect()
-                    except Exception as e:
-                        log("MQTT disconnect error: " + str(e))
-                    client = None
-
-            # Wake mode: stay awake if wake_timeout is active
-            if wake_timeout > 0:
-                time.sleep(1)
-                wake_timeout -= 1
-            elif flow_detected:
-                flow_detected = False  # Reset flag
-                # Immediately loop to check should_publish (don't sleep)
-            else:
-                # Disconnect WiFi before lightsleep (required per ESP-IDF docs)
-                if wlan is not None and wlan.isconnected():
-                    wlan.disconnect()
-                    wlan.active(False)
-                log(f"Entering lightsleep for {SLEEP_INTERVAL}ms...")
-                time.sleep(2)  # Allow log to finish flushing
-                lightsleep(SLEEP_INTERVAL)  # Suspend CPU, wakes on GPIO interrupt or timer
-            
-        except Exception as e:
-            log("Main loop error: " + str(e))
-            time.sleep(5)
-
-main()
+if __name__ == "__main__":
+    main()

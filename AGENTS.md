@@ -1,6 +1,32 @@
 # AGENTS.md - Flow Rate Sensor Project
 
-## Project Overview
+## Testing
+
+**All tests require the ESP32 device connected to `/dev/ttyUSB0`.**
+
+Deploy and run tests on the device:
+
+```bash
+# Deploy all files
+mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
+mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
+mpremote connect /dev/ttyUSB0 fs cp state.py :state.py
+mpremote connect /dev/ttyUSB0 fs cp mqtt.py :mqtt.py
+mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
+mpremote connect /dev/ttyUSB0 fs cp tests/test_device.py :test_device.py
+
+# Run tests on device
+mpremote connect /dev/ttyUSB0 run test_device.py
+
+# Clean up
+mpremote connect /dev/ttyUSB0 fs rm :test_device.py
+```
+
+Tests cover: flow rate calculations, keg math, MQTT payload, state persistence,
+state transitions (on_reset, on_wake_command, on_pulse, on_publish, on_sleep_tick),
+and predicates (should_publish, should_sleep).
+
+---
 
 This is a **MicroPython** project for an ESP32 microcontroller that reads a hall effect flow sensor and publishes data to Home Assistant via MQTT. The code runs directly on the ESP32 device.
 
@@ -18,12 +44,13 @@ This project uses **mpremote** for deployment:
 
 ```bash
 # Install mpremote
-pip install mpremote
+.venv/bin/pip install mpremote
 
-# Deploy main.py
+# Deploy all files
 mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
-
-# Copy secrets.py
+mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
+mpremote connect /dev/ttyUSB0 fs cp state.py :state.py
+mpremote connect /dev/ttyUSB0 fs cp mqtt.py :mqtt.py
 mpremote connect /dev/ttyUSB0 fs cp secrets.py :secrets.py
 
 # Reset the device
@@ -34,7 +61,7 @@ Or use **esptool** to flash firmware:
 
 ```bash
 # Install esptool
-pip install esptool
+.venv/bin/pip install esptool
 
 # Erase ESP32 flash
 esptool.py --port /dev/ttyUSB0 erase_flash
@@ -56,12 +83,12 @@ minicom -D /dev/ttyUSB0 -b 115200
 # Exit: Ctrl+A, then X, then Enter
 ```
 
-### Running a Single Test
+### Manual Hardware Testing
 
-**No formal test suite exists.** This is an embedded project without automated tests. Test manually by:
-1. Deploying code to the ESP32
-2. Watching the serial output
-3. Checking Home Assistant for MQTT entities
+Hardware integration tests (WiFi, MQTT, deepsleep) must be tested manually:
+1. Deploy code to the ESP32
+2. Watch the serial output
+3. Check Home Assistant for MQTT entities
 
 ---
 
@@ -161,18 +188,29 @@ except Exception:
 
 ## Working with This Project
 
+### Linting
+
+```bash
+# Install pylint (first time)
+.venv/bin/pip install pylint
+
+# Run lint
+.venv/bin/pylint main.py
+```
+
 ### Adding New Features
 
-1. Edit `main.py`
+1. Run `pylint main.py` — target 10/10
 2. Deploy to ESP32 using mpremote
-3. Monitor serial output
-4. Verify MQTT messages arrive in Home Assistant
+3. Test on device (see Testing section)
+4. Monitor serial output
+5. Verify MQTT messages arrive in Home Assistant
 
 ### Known Issues / Gotchas
 
 - MicroPython doesn't support all standard library modules
 - Memory is limited; avoid large data structures
-- The flow sensor calibration constant (`23`) may need adjustment for accuracy
+- The flow sensor calibration constant (`PULSES_PER_LITER = 450`) may need adjustment for accuracy
 
 ### Configuration Required Before Deploy
 
@@ -202,7 +240,7 @@ MQTT_PASSWORD = "your_password"
 
 To enable WebREPL access, add an MQTT Button to Home Assistant. This lets you wake the device from sleep mode.
 
-**Option 1: Using configuration.yaml**
+#### Option 1: Using configuration.yaml
 
 Add to your `configuration.yaml`:
 
@@ -216,7 +254,7 @@ mqtt:
 
 Then restart Home Assistant.
 
-**Option 2: Using MQTT Auto-Discovery**
+#### Option 2: Using MQTT Auto-Discovery
 
 Publish this to `homeassistant/button/flow_sensor_wake/config` (retain=True):
 

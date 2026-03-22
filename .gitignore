@@ -10,3 +10,5 @@ mosquitto/config/mosquitto.passwd
 # python virtual environments
 venv
 .venv
+
+
