@@ -6,6 +6,27 @@ A complete DIY keg level monitor using a hall effect flow sensor, an ESP32, Micr
 
 ---
 
+## Prerequisites
+
+This project uses a Python virtual environment for tooling. Set it up once:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install mpremote esptool pylint
+```
+
+All commands below assume the venv is active. Activate it with `source .venv/bin/activate` or prefix commands with `.venv/bin/` (e.g. `.venv/bin/mpremote`).
+
+### Finding the USB Device
+
+```bash
+ls /dev/ttyUSB*   # Usually /dev/ttyUSB0
+lsusb             # List USB devices (ESP32 shows as "CP2102" or "CH340")
+```
+
+---
+
 ## Table of Contents
 
 1. [Parts List](#parts-list)

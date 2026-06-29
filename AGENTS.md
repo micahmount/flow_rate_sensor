@@ -1,5 +1,24 @@
 # AGENTS.md - Flow Rate Sensor Project
 
+## Prerequisites
+
+This project uses a Python virtual environment. Set it up once:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install mpremote esptool pylint
+```
+
+All commands below assume the venv is active. Activate it with `source .venv/bin/activate` or prefix commands with `.venv/bin/` (e.g. `.venv/bin/mpremote`).
+
+### Finding the USB Device
+
+```bash
+ls /dev/ttyUSB*   # Usually /dev/ttyUSB0
+lsusb             # List USB devices (ESP32 shows as "CP2102" or "CH340")
+```
+
 ## Testing
 
 **All tests require the ESP32 device connected to `/dev/ttyUSB0`.**
@@ -38,7 +57,22 @@ This is a **MicroPython** project for an ESP32 microcontroller that reads a hall
 
 ## Build / Deploy Commands
 
-### Deploying to ESP32
+### Step 1: Deploy Mosquitto MQTT Broker to HA VM
+
+The ESP32 publishes to a Mosquitto broker running as a Home Assistant add-on.
+Run this once after deploying the HA VM:
+
+```bash
+./deploy-mqtt.sh --mqtt-password "your_password"
+# Or with a custom IP:
+./deploy-mqtt.sh --mqtt-password "your_password" --ha-ip 192.168.1.100
+```
+
+This installs the Mosquitto add-on in HA OS, configures credentials,
+and registers the MQTT integration. The script prints the broker IP
+— use that in `secrets.py` below.
+
+### Step 2: Deploy Code to ESP32
 
 This project uses **mpremote** for deployment:
 
@@ -214,13 +248,13 @@ except Exception:
 
 ### Configuration Required Before Deploy
 
-Edit these values in `main.py`:
+Edit these values in `secrets.py`:
 
 ```python
 WIFI_SSID     = "your_wifi_ssid"
 WIFI_PASSWORD = "your_wifi_password"
 
-MQTT_BROKER   = "192.168.1.100"   # Your Home Assistant IP
+MQTT_BROKER   = "192.168.1.100"   # Your Home Assistant VM's IP
 MQTT_PORT     = 1883
 MQTT_USER     = "mqtt_esp32"
 MQTT_PASSWORD = "your_password"
@@ -236,40 +270,12 @@ MQTT_PASSWORD = "your_password"
 
 ## Home Assistant Configuration
 
-### MQTT Button (Wake Device)
+No manual HA config needed — the `deploy-mqtt.sh` script installs the Mosquitto add-on,
+configures the MQTT integration, and the ESP32 publishes auto-discovery topics.
+All entities (Flow Rate, Dispensed, Keg Level, Reset button, Wake button) appear
+automatically in HA.
 
-To enable WebREPL access, add an MQTT Button to Home Assistant. This lets you wake the device from sleep mode.
+### Wake Button
 
-#### Option 1: Using configuration.yaml
-
-Add to your `configuration.yaml`:
-
-```yaml
-mqtt:
-  button:
-    - name: "Flow Sensor Wake"
-      command_topic: "home/flow_sensor/wake"
-      payload_press: "WAKE"
-```
-
-Then restart Home Assistant.
-
-#### Option 2: Using MQTT Auto-Discovery
-
-Publish this to `homeassistant/button/flow_sensor_wake/config` (retain=True):
-
-```json
-{
-  "name": "Flow Sensor Wake",
-  "unique_id": "flow_sensor_wake_button",
-  "command_topic": "home/flow_sensor/wake",
-  "payload_press": "WAKE"
-}
-```
-
-### Using the Wake Button
-
-1. Click the button in Home Assistant to send a wake command
-2. Wait ~5 seconds for the device to connect
-3. Access WebREPL at `ws://<device_ip>:8266`
-4. The device stays awake for 5 minutes, then returns to sleep mode
+The wake button is auto-discovered by the MQTT integration when the ESP32 boots.
+It sends a `WAKE` command to keep the device awake for 5 minutes (for WebREPL access).
