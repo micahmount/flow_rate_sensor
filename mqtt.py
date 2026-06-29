@@ -39,8 +39,8 @@ def disconnect(client):
 # ─── Publish ──────────────────────────────────────────────────────────────────
 
 def publish_state(client, payload, config):
-    """Publish state JSON payload to state topic."""
-    client.publish(config["topic_state"], payload.encode())
+    """Publish state JSON payload to state topic (retained so entities see initial value)."""
+    client.publish(config["topic_state"], payload.encode(), retain=True)
 
 
 def listen(client, seconds):
