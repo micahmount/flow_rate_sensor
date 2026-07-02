@@ -23,7 +23,7 @@ except ImportError as exc:
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 FLOW_PIN              = 4
-PULSES_PER_LITER      = 98        # F = 98 * Q per datasheet (pulses/liter/minute)
+PULSES_PER_LITER      = 684       # Empirically calibrated (2026-07-01, 345ml test pour)
 KEG_VOLUME_LITERS     = 18.93     # 5 US gallon corny keg
 PUBLISH_INTERVAL      = 30        # seconds between publishes
 SLEEP_INTERVAL        = 270000    # ms (4.5 minutes)
@@ -31,8 +31,8 @@ WAKE_TIMEOUT_SECONDS  = 300       # seconds to stay awake after wake command
 COMMAND_LISTEN_SECONDS = 5        # seconds to listen for HA commands after publish
 MINIMUM_AWAKE_SECONDS = 30        # minimum time device stays awake per cycle
 TIMEZONE_BASE         = -8 * 3600 # PST (UTC-8)
-DEBOUNCE_MS           = 50
-MIN_PULSE_MS          = 2
+DEBOUNCE_MS           = 1
+MIN_PULSE_MS          = 1
 MAX_FLOW_RATE         = 30        # L/min sanity cap
 
 MQTT_CONFIG = {

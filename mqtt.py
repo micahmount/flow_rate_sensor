@@ -65,7 +65,7 @@ def publish_discovery(client, config):
     """
     device = {
         "identifiers":    [config["client_id"]],
-        "name":           "Water Flow Sensor",
+        "name":           "Flow Rate Sensor",
         "model":          "Gredia 1/4\" Hall Effect",
         "manufacturer":   "Gredia",
     }
@@ -75,7 +75,7 @@ def publish_discovery(client, config):
             b"homeassistant/sensor/flow_sensor/flow_rate/config",
             {
                 "name":                 "Flow Rate",
-                "unique_id":            "water_flow_rate",
+                "unique_id":            "flow_rate",
                 "state_topic":          config["topic_state"].decode(),
                 "availability_topic":   config["topic_availability"].decode(),
                 "value_template":       "{{ value_json.flow_rate }}",
@@ -91,7 +91,7 @@ def publish_discovery(client, config):
             b"homeassistant/sensor/flow_sensor/total_volume/config",
             {
                 "name":                 "Dispensed",
-                "unique_id":            "water_total_volume",
+                "unique_id":            "total_volume",
                 "state_topic":          config["topic_state"].decode(),
                 "availability_topic":   config["topic_availability"].decode(),
                 "value_template":       "{{ value_json.total_volume }}",
