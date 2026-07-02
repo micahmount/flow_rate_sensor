@@ -3,10 +3,8 @@ import ujson
 
 # ─── Flow Rate ────────────────────────────────────────────────────────────────
 
-# Sensor formula from datasheet: F = 98 * Q
-# Where F = frequency (Hz), Q = flow rate (L/min)
-# Therefore: Q = F / 98 = (pulse_count / elapsed) / 98
-PULSES_PER_LITER_PER_MINUTE = 98
+# Empirically calibrated: 684 pulses per liter (2026-07-01, 345ml test pour)
+PULSES_PER_LITER_PER_MINUTE = 684
 
 
 def calculate_flow_rate(pulse_count, elapsed, pulses_per_liter_per_minute=PULSES_PER_LITER_PER_MINUTE):

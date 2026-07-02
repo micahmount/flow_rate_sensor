@@ -290,12 +290,14 @@ Published → flow: 0.0 L/min | keg: 18.93L (100.0%)
 Entering lightsleep for 270000ms...
 ```
 
-In Home Assistant, go to **Settings → Devices & Services → MQTT** and you should see a new device called **Water Flow Sensor** with four entities:
+In Home Assistant, go to **Settings → Devices & Services → MQTT** and you should see a new device called **Flow Sensor** with six entities:
 
 - `sensor.water_flow_rate` — current flow rate in L/min
 - `sensor.water_total_volume` — all-time total volume in L
 - `sensor.keg_level` — keg fullness as a percentage
 - `sensor.keg_remaining` — liters left in the keg
+- `button.flow_sensor_reset_keg` — resets the keg dispensed counter to zero
+- `button.flow_sensor_stay_awake` — keeps the device awake for 5 minutes (for OTA/WebREPL access)
 
 ---
 

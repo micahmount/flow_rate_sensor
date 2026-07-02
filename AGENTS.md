@@ -57,20 +57,11 @@ This is a **MicroPython** project for an ESP32 microcontroller that reads a hall
 
 ## Build / Deploy Commands
 
-### Step 1: Deploy Mosquitto MQTT Broker to HA VM
+### Step 1: Set Up Mosquitto MQTT Broker in HA
 
-The ESP32 publishes to a Mosquitto broker running as a Home Assistant add-on.
-Run this once after deploying the HA VM:
-
-```bash
-./deploy-mqtt.sh --mqtt-password "your_password"
-# Or with a custom IP:
-./deploy-mqtt.sh --mqtt-password "your_password" --ha-ip 192.168.1.100
-```
-
-This installs the Mosquitto add-on in HA OS, configures credentials,
-and registers the MQTT integration. The script prints the broker IP
-— use that in `secrets.py` below.
+The ESP32 publishes to the Mosquitto broker running as a Home Assistant add-on.
+Install it once via **Settings → Add-ons → Mosquitto broker** in HA, then configure
+credentials and update `secrets.py` with the HA VM's IP address.
 
 ### Step 2: Deploy Code to ESP32
 
@@ -120,6 +111,7 @@ minicom -D /dev/ttyUSB0 -b 115200
 ### Manual Hardware Testing
 
 Hardware integration tests (WiFi, MQTT, deepsleep) must be tested manually:
+
 1. Deploy code to the ESP32
 2. Watch the serial output
 3. Check Home Assistant for MQTT entities
@@ -270,8 +262,8 @@ MQTT_PASSWORD = "your_password"
 
 ## Home Assistant Configuration
 
-No manual HA config needed — the `deploy-mqtt.sh` script installs the Mosquitto add-on,
-configures the MQTT integration, and the ESP32 publishes auto-discovery topics.
+No manual HA config needed — install the Mosquitto add-on once via the HA UI,
+then the ESP32 publishes auto-discovery topics automatically.
 All entities (Flow Rate, Dispensed, Keg Level, Reset button, Wake button) appear
 automatically in HA.
 
