@@ -135,6 +135,19 @@ def publish_discovery(client, config):
             },
         ),
         (
+            b"homeassistant/sensor/flow_sensor/last_updated/config",
+            {
+                "name":                 "Last Updated",
+                "unique_id":            "last_updated",
+                "state_topic":          config["topic_state"].decode(),
+                "availability_topic":   config["topic_availability"].decode(),
+                "value_template":       "{{ value_json.last_updated }}",
+                "icon":                 "mdi:clock-time-four",
+                "force_update":         True,
+                "device":               device,
+            },
+        ),
+        (
             b"homeassistant/button/flow_sensor/reset/config",
             {
                 "name":             "Reset Keg",
@@ -146,12 +159,14 @@ def publish_discovery(client, config):
             },
         ),
         (
-            b"homeassistant/button/flow_sensor/wake/config",
+            b"homeassistant/switch/flow_sensor/wake/config",
             {
                 "name":             "Stay Awake",
                 "unique_id":        "flow_sensor_wake",
                 "command_topic":    config["topic_wake"].decode(),
-                "payload_press":    "WAKE",
+                "state_topic":      config["topic_wake_state"].decode(),
+                "payload_on":       "ON",
+                "payload_off":      "OFF",
                 "retain":           True,
                 "device":           device,
             },

@@ -27,7 +27,6 @@ PULSES_PER_LITER      = 684       # Empirically calibrated (2026-07-01, 345ml te
 KEG_VOLUME_LITERS     = 18.93     # 5 US gallon corny keg
 PUBLISH_INTERVAL      = 30        # seconds between publishes
 SLEEP_INTERVAL        = 270000    # ms (4.5 minutes)
-WAKE_TIMEOUT_SECONDS  = 300       # seconds to stay awake after wake command
 COMMAND_LISTEN_SECONDS = 5        # seconds to listen for HA commands after publish
 MINIMUM_AWAKE_SECONDS = 30        # minimum time device stays awake per cycle
 TIMEZONE_BASE         = -8 * 3600 # PST (UTC-8)
@@ -45,16 +44,17 @@ MQTT_CONFIG = {
     "topic_availability": b"home/flow_sensor/availability",
     "topic_reset":        b"home/flow_sensor/reset",
     "topic_wake":         b"home/flow_sensor/wake",
+    "topic_wake_state":   b"home/flow_sensor/wake_state",
 }
 
-# ─── ISR Global ───────────────────────────────────────────────────────────────
+# ─── ISR Globals ──────────────────────────────────────────────────────────────
 
 # pulse_count is written by the ISR — kept as a plain global for safe ISR access.
 # It is accumulated into state on every publish cycle then reset to 0.
 pulse_count     = 0
 last_pulse_time = 0
 
-# ─── Interrupt Handler ────────────────────────────────────────────────────────
+# ─── Interrupt Handlers ──────────────────────────────────────────────────────
 
 def pulse_handler(pin):
     global pulse_count, last_pulse_time
@@ -74,13 +74,11 @@ def pulse_handler(pin):
     last_pulse_time = now
     pulse_count += 1
 
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
 def log(msg):
-    t = time.localtime()
-    tz_offset = calculations.get_timezone_offset(t[1], TIMEZONE_BASE)
-    t = time.localtime(time.time() + tz_offset)
-    ts = f"{t[0]}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}"
+    ts = calculations.format_timestamp(time.time(), TIMEZONE_BASE)
     print(f"[{ts}] {msg}")
 
 
@@ -99,19 +97,12 @@ def human_duration(ms):
 
 
 def log_boot(state):
-    if state["stay_awake"] > 0:
-        log(f"Boot — wake mode, staying awake for {state['stay_awake']}s")
+    if state["stay_awake_enabled"]:
+        log("Boot — wake toggle ON")
     else:
         log("Boot — deepsleep, will sleep after publish")
     log(f"  dispensed={state['keg_dispensed']}L, "
         f"pulses={state['total_pulses']}")
-
-
-def log_wake_mode(state):
-    if state["stay_awake"] == WAKE_TIMEOUT_SECONDS:
-        log(f"Wake mode active — staying awake for {WAKE_TIMEOUT_SECONDS}s")
-    elif state["stay_awake"] % 30 == 0 and state["stay_awake"] > 0:
-        log(f"Wake mode — {state['stay_awake']}s remaining")
 
 # ─── WiFi ─────────────────────────────────────────────────────────────────────
 
@@ -193,8 +184,12 @@ def make_callback(get_state, set_state):
             s = state_module.on_reset(s)
             log("Keg reset")
         elif topic == MQTT_CONFIG["topic_wake"]:
-            s = state_module.on_wake_command(s, WAKE_TIMEOUT_SECONDS)
-            log(f"Wake command — staying awake for {WAKE_TIMEOUT_SECONDS}s")
+            if msg == b"ON":
+                s["stay_awake_enabled"] = True
+                log("Wake mode ON (toggled)")
+            elif msg == b"OFF":
+                s["stay_awake_enabled"] = False
+                log("Wake mode OFF (toggled)")
         set_state(s)
     return callback
 
@@ -223,7 +218,9 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
     total_volume = round(state["total_pulses"] / PULSES_PER_LITER, 3)
     keg_remaining = calculations.calculate_keg_remaining(state["keg_dispensed"], KEG_VOLUME_LITERS)
     keg_percent = calculations.calculate_keg_percent(keg_remaining, KEG_VOLUME_LITERS)
-    payload = calculations.build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent)
+    last_updated = calculations.format_timestamp(now, TIMEZONE_BASE)
+    payload = calculations.build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent,
+                                              last_updated=last_updated)
 
     # Connect MQTT — fail fast, skip publish if connect fails
     try:
@@ -236,8 +233,11 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
     try:
         if not discovery_done:
             mqtt_module.publish_discovery(client, MQTT_CONFIG)
+            client.publish(b"homeassistant/button/flow_sensor/wake/config", b"", retain=True)
             discovery_done = True
         mqtt_module.publish_state(client, payload, MQTT_CONFIG)
+        wake_state = "ON" if state["stay_awake_enabled"] else "OFF"
+        client.publish(MQTT_CONFIG["topic_wake_state"], wake_state.encode(), retain=True)
         log(f"Published — flow: {flow_rate} L/min | "
             f"remaining: {keg_remaining}L ({keg_percent}%)")
         mqtt_module.listen(client, COMMAND_LISTEN_SECONDS)
@@ -257,7 +257,7 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
 # ─── Sleep/Tick ───────────────────────────────────────────────────────────────
 
 def sleep_or_tick(state_ref, wlan, boot_time, sensor_pin):
-    """Either enter deepsleep or decrement stay_awake and sleep 1s."""
+    """Either enter deepsleep or sleep 1s while toggle is active."""
     current = state_ref[0]
 
     if state_module.should_sleep(current):
@@ -266,8 +266,6 @@ def sleep_or_tick(state_ref, wlan, boot_time, sensor_pin):
         disconnect_wifi(wlan)
         enter_deepsleep(sensor_pin)
     else:
-        log_wake_mode(current)
-        state_ref[0] = state_module.on_sleep_tick(current)
         time.sleep(1)
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

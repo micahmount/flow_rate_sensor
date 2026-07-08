@@ -6,10 +6,10 @@ import ujson
 STATE_FILE = "/flow_state.json"
 
 DEFAULT_STATE = {
-    "keg_dispensed": 0.0,
-    "total_pulses":  0,
-    "stay_awake":    0,
-    "last_publish":  0,
+    "keg_dispensed":       0.0,
+    "total_pulses":        0,
+    "stay_awake_enabled":  False,
+    "last_publish":        0,
 }
 
 
@@ -24,10 +24,10 @@ def load():
         with open(STATE_FILE, encoding="utf-8") as f:
             data = ujson.load(f)
             return {
-                "keg_dispensed": data.get("keg_dispensed", 0.0),
-                "total_pulses":  data.get("total_pulses", 0),
-                "stay_awake":    data.get("stay_awake", 0),
-                "last_publish":  0,
+                "keg_dispensed":       data.get("keg_dispensed", 0.0),
+                "total_pulses":        data.get("total_pulses", 0),
+                "stay_awake_enabled":  data.get("stay_awake_enabled", False),
+                "last_publish":        0,
             }
     except Exception:
         return dict(DEFAULT_STATE)
@@ -38,10 +38,10 @@ def save(state):
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             ujson.dump({
-                "keg_dispensed": state["keg_dispensed"],
-                "total_pulses":  state["total_pulses"],
-                "stay_awake":    state["stay_awake"],
-                "last_publish":  state["last_publish"],
+                "keg_dispensed":       state["keg_dispensed"],
+                "total_pulses":        state["total_pulses"],
+                "stay_awake_enabled":  state["stay_awake_enabled"],
+                "last_publish":        state["last_publish"],
             }, f)
     except Exception:
         pass
@@ -51,24 +51,17 @@ def save(state):
 
 def _copy(state):
     return {
-        "keg_dispensed": state["keg_dispensed"],
-        "total_pulses":  state["total_pulses"],
-        "stay_awake":    state["stay_awake"],
-        "last_publish":  state["last_publish"],
+        "keg_dispensed":       state["keg_dispensed"],
+        "total_pulses":        state["total_pulses"],
+        "stay_awake_enabled":  state["stay_awake_enabled"],
+        "last_publish":        state["last_publish"],
     }
 
 
 def on_reset(state):
-    """Reset keg_dispensed to 0. Preserves total_pulses and stay_awake."""
+    """Reset keg_dispensed to 0. Preserves total_pulses."""
     s = _copy(state)
     s["keg_dispensed"] = 0.0
-    return s
-
-
-def on_wake_command(state, timeout):
-    """Set stay_awake to timeout seconds."""
-    s = _copy(state)
-    s["stay_awake"] = timeout
     return s
 
 
@@ -91,13 +84,6 @@ def on_publish(state, now):
     return s
 
 
-def on_sleep_tick(state):
-    """Decrement stay_awake by 1, clamped at 0."""
-    s = _copy(state)
-    s["stay_awake"] = max(0, state["stay_awake"] - 1)
-    return s
-
-
 # ─── Predicates ───────────────────────────────────────────────────────────────
 
 def should_publish(state, now, interval):
@@ -106,5 +92,5 @@ def should_publish(state, now, interval):
 
 
 def should_sleep(state):
-    """True if no wake command is active."""
-    return state["stay_awake"] == 0
+    """True if wake toggle is off."""
+    return not state["stay_awake_enabled"]
