@@ -65,7 +65,17 @@ import main
 print(main.VERSION)
 ```
 
-Bump the `VERSION` constant in `main.py` on every firmware change so you can always tell what's running on the device, and keep it in sync with the git release tag (`v<VERSION>`).
+Bump the `VERSION` constant in `main.py` on every firmware change so you can always tell what's running on the device.
+
+### Versioning
+
+This project follows [Semantic Versioning 2.0.0](https://semver.org/). The public API is the MQTT interface — the topics published by the device and the JSON keys in the state payload. Bump accordingly:
+
+- **MAJOR** — breaking change to the MQTT interface (a topic or payload key is removed, renamed, or changes meaning)
+- **MINOR** — backward-compatible addition (e.g. a new payload key, like `version`)
+- **PATCH** — backward-compatible bug fix (e.g. a calibration adjustment)
+
+The `VERSION` string in `main.py` is always the semantic version, and it must stay in sync with the git release tag `v<VERSION>` (e.g. `VERSION = "1.3.0"` ↔ tag `v1.3.0`).
 
 ---
 

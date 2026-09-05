@@ -12,6 +12,23 @@ def assert_eq(label, actual, expected):
     print(f"PASS: {label}")
 
 
+# ─── Versioning (SemVer) ──────────────────────────────────────────────────────
+
+print("\n=== Firmware Version ===")
+
+def assert_valid_semver(version):
+    core, _, _ = version.partition("-")
+    parts = core.split(".")
+    assert len(parts) == 3, f"VERSION {version!r} must be MAJOR.MINOR.PATCH"
+    for part in parts:
+        assert part.isdigit(), f"invalid version part {part!r}"
+        assert part == "0" or not part.startswith("0"), f"leading zero in {part!r}"
+    print(f"PASS: main.VERSION is valid semver: {version}")
+
+assert_valid_semver(main.VERSION)
+assert_eq("version string not empty", bool(main.VERSION), True)
+
+
 # ─── Human Duration ──────────────────────────────────────────────────────────
 
 print("\n=== Human Duration ===")
