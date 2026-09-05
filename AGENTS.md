@@ -244,7 +244,7 @@ except Exception:
 ### Adding New Features
 
 1. Run `pylint main.py` — target 10/10
-2. Bump `VERSION` in `main.py` on every firmware change (check via `import main; main.VERSION` or the HA Firmware Version sensor)
+2. Bump `VERSION` in `main.py` on every firmware change, keeping it in sync with the git release tag (`v<VERSION>`; check via `import main; main.VERSION` or the HA Firmware Version sensor)
 3. Deploy to ESP32 using mpremote
 4. Test on device (see Testing section)
 5. Monitor serial output

@@ -52,20 +52,20 @@ The ESP32 automatically publishes a JSON state payload to `home/flow_sensor/stat
 | Remaining | `keg_remaining` | Liters remaining in the keg |
 | Keg Level | `keg_percent` | Keg fullness as a percentage (0-100) |
 | Last Updated | `last_updated` | Timestamp of the last publish |
-| Firmware Version | `version` | Firmware version string, e.g. `1.0.0` |
+| Firmware Version | `version` | Firmware version string, e.g. `1.3.0` |
 
 Home Assistant auto-discovers all of these as sensor entities — no manual configuration required. A **Reset Keg** button and a **Stay Awake** switch are auto-discovered too (see below).
 
 ### Checking the Firmware Version
 
-The version is logged at boot (`Flow Sensor v1.0.0`) and published in the MQTT payload (visible as the **Firmware Version** sensor in HA). From a WebREPL REPL you can also run:
+The version is logged at boot (`Flow Sensor v1.3.0`) and published in the MQTT payload (visible as the **Firmware Version** sensor in HA). From a WebREPL REPL you can also run:
 
 ```python
 import main
 print(main.VERSION)
 ```
 
-Bump the `VERSION` constant in `main.py` on every firmware change so you can always tell what's running on the device.
+Bump the `VERSION` constant in `main.py` on every firmware change so you can always tell what's running on the device, and keep it in sync with the git release tag (`v<VERSION>`).
 
 ---
 
@@ -316,7 +316,7 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 - `sensor.keg_remaining` — liters left in the keg
 - `sensor.keg_level` — keg fullness as a percentage
 - `sensor.last_updated` — timestamp of the last publish
-- `sensor.version` — firmware version (e.g. `1.0.0`)
+- `sensor.version` — firmware version (e.g. `1.3.0`)
 - `button.flow_sensor_reset_keg` — resets the keg dispensed counter to zero
 - `switch.flow_sensor_stay_awake` — keeps the device awake for WebREPL access
 
@@ -452,7 +452,7 @@ Key settings in `main.py`:
 
 | Constant | Default | Description |
 | ---------- | --------- | ------------- |
-| `VERSION` | `1.0.0` | Firmware version — bump on every change |
+| `VERSION` | `1.3.0` | Firmware version — bump on every change, matches git tag |
 | `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes while awake |
 | `SLEEP_INTERVAL` | 270000ms | Deepsleep duration (4.5 minutes) |
 | `COMMAND_LISTEN_SECONDS` | 5 | Seconds to listen for HA commands after each publish |
