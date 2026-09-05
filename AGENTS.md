@@ -249,6 +249,7 @@ except Exception:
 4. Test on device (see Testing section)
 5. Monitor serial output
 6. Verify MQTT messages arrive in Home Assistant
+7. When releasing, tag the release commit with exactly `v<VERSION>`: `git tag -a v<VERSION> -m "Release v<VERSION>"` and push the tag. The tag and `main.VERSION` must always match.
 
 ### Known Issues / Gotchas
 

@@ -79,6 +79,17 @@ Every commit that changes firmware code is itself a version bump, so `VERSION` a
 
 The `VERSION` string in `main.py` is always the semantic version, and it must stay in sync with the git release tag `v<VERSION>` (e.g. `VERSION = "1.3.1"` ↔ tag `v1.3.1`).
 
+### Releasing
+
+Every released firmware version gets a git tag matching its `VERSION`. When you ship a firmware commit (the deploy step), tag it and push the tag:
+
+```bash
+git tag -a v1.3.1 -m "Release v1.3.1"
+git push origin v1.3.1
+```
+
+Then the `VERSION` in `main.py` and the git tag are always in step.
+
 ---
 
 ## Parts List
