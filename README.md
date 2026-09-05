@@ -52,13 +52,13 @@ The ESP32 automatically publishes a JSON state payload to `home/flow_sensor/stat
 | Remaining | `keg_remaining` | Liters remaining in the keg |
 | Keg Level | `keg_percent` | Keg fullness as a percentage (0-100) |
 | Last Updated | `last_updated` | Timestamp of the last publish |
-| Firmware Version | `version` | Firmware version string, e.g. `1.3.1` |
+| Firmware Version | `version` | Firmware version string, e.g. `1.3.2` |
 
 Home Assistant auto-discovers all of these as sensor entities — no manual configuration required. A **Reset Keg** button and a **Stay Awake** switch are auto-discovered too (see below).
 
 ### Checking the Firmware Version
 
-The version is logged at boot (`Flow Sensor v1.3.1`) and published in the MQTT payload (visible as the **Firmware Version** sensor in HA). From a WebREPL REPL you can also run:
+The version is logged at boot (`Flow Sensor v1.3.2`) and published in the MQTT payload (visible as the **Firmware Version** sensor in HA). From a WebREPL REPL you can also run:
 
 ```python
 import main
@@ -75,17 +75,17 @@ This project follows [Semantic Versioning 2.0.0](https://semver.org/). The publi
 - **MINOR** — backward-compatible addition (e.g. a new payload key, like `version`)
 - **PATCH** — backward-compatible bug fix (e.g. a calibration adjustment)
 
-Every commit that changes firmware code is itself a version bump, so `VERSION` always reflects exactly what is deployed on the device; a commit that only touches docs, tests, or HA config keeps `VERSION`.
+Every commit bumps `VERSION` — there is no carve-out for docs or tests — so `VERSION` always reflects the exact current state of the repo.
 
-The `VERSION` string in `main.py` is always the semantic version, and it must stay in sync with the git release tag `v<VERSION>` (e.g. `VERSION = "1.3.1"` ↔ tag `v1.3.1`).
+The `VERSION` string in `main.py` is always the semantic version, and it must stay in sync with the git release tag `v<VERSION>` (e.g. `VERSION = "1.3.2"` ↔ tag `v1.3.2`).
 
 ### Releasing
 
 Every released firmware version gets a git tag matching its `VERSION`. When you ship a firmware commit (the deploy step), tag it and push the tag:
 
 ```bash
-git tag -a v1.3.1 -m "Release v1.3.1"
-git push origin v1.3.1
+git tag -a v1.3.2 -m "Release v1.3.2"
+git push origin v1.3.2
 ```
 
 Then the `VERSION` in `main.py` and the git tag are always in step.
@@ -339,7 +339,7 @@ In Home Assistant, go to **Settings → Devices & Services → MQTT** and you sh
 - `sensor.keg_remaining` — liters left in the keg
 - `sensor.keg_level` — keg fullness as a percentage
 - `sensor.last_updated` — timestamp of the last publish
-- `sensor.version` — firmware version (e.g. `1.3.1`)
+- `sensor.version` — firmware version (e.g. `1.3.2`)
 - `button.flow_sensor_reset_keg` — resets the keg dispensed counter to zero
 - `switch.flow_sensor_stay_awake` — keeps the device awake for WebREPL access
 
@@ -475,7 +475,7 @@ Key settings in `main.py`:
 
 | Constant | Default | Description |
 | ---------- | --------- | ------------- |
-| `VERSION` | `1.3.1` | Firmware version — bump every commit that changes firmware, matches git tag |
+| `VERSION` | `1.3.2` | Firmware version — bump every commit, matches git tag |
 | `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes while awake |
 | `SLEEP_INTERVAL` | 270000ms | Deepsleep duration (4.5 minutes) |
 | `COMMAND_LISTEN_SECONDS` | 5 | Seconds to listen for HA commands after each publish |

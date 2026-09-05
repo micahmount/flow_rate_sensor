@@ -89,14 +89,14 @@ assert_eq("empty keg = 0%",
 
 print("\n=== MQTT Payload ===")
 
-payload = calculations.build_mqtt_payload(1.5, 3.0, 15.93, 84.2, "2026-07-13 10:00:00", version="1.3.1")
+payload = calculations.build_mqtt_payload(1.5, 3.0, 15.93, 84.2, "2026-07-13 10:00:00", version="1.3.2")
 data = ujson.loads(payload)
 assert_eq("payload flow_rate",    data["flow_rate"],    1.5)
 assert_eq("payload total_volume", data["total_volume"], 3.0)
 assert_eq("payload keg_remaining",data["keg_remaining"],15.93)
 assert_eq("payload keg_percent",  data["keg_percent"],  84.2)
 assert_eq("payload last_updated", data["last_updated"], "2026-07-13 10:00:00")
-assert_eq("payload version",      data["version"],      "1.3.1")
+assert_eq("payload version",      data["version"],      "1.3.2")
 
 
 print("\n=== Timestamp Format ===")
