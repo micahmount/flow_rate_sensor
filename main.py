@@ -13,6 +13,7 @@ import webrepl
 import esp32
 from machine import Pin, deepsleep
 import calculations
+from calculations import PULSES_PER_LITER
 import state as state_module
 import mqtt as mqtt_module
 try:
@@ -22,17 +23,15 @@ except ImportError as exc:
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-FLOW_PIN              = 4
-PULSES_PER_LITER      = 684       # Empirically calibrated (2026-07-01, 345ml test pour)
-KEG_VOLUME_LITERS     = 18.93     # 5 US gallon corny keg
-PUBLISH_INTERVAL      = 30        # seconds between publishes
-SLEEP_INTERVAL        = 270000    # ms (4.5 minutes)
-COMMAND_LISTEN_SECONDS = 5        # seconds to listen for HA commands after publish
-MINIMUM_AWAKE_SECONDS = 30        # minimum time device stays awake per cycle
-TIMEZONE_BASE         = -8 * 3600 # PST (UTC-8)
-DEBOUNCE_MS           = 1
-MIN_PULSE_MS          = 1
-MAX_FLOW_RATE         = 30        # L/min sanity cap
+FLOW_PIN               = 4
+KEG_VOLUME_LITERS      = 18.93     # 5 US gallon corny keg
+PUBLISH_INTERVAL       = 30        # seconds between publishes
+SLEEP_INTERVAL         = 270000    # ms (4.5 minutes)
+COMMAND_LISTEN_SECONDS = 5         # seconds to listen for HA commands after publish
+MINIMUM_AWAKE_SECONDS  = 30        # minimum time device stays awake per cycle
+TIMEZONE_BASE          = -8 * 3600 # PST (UTC-8)
+MIN_PULSE_INTERVAL_MS  = 1         # reject pulses closer than this
+MAX_FLOW_RATE          = 30        # L/min sanity cap
 
 MQTT_CONFIG = {
     "client_id":          secrets.MQTT_CLIENT_ID,
@@ -60,17 +59,12 @@ def pulse_handler(pin):
     global pulse_count, last_pulse_time
     now = time.ticks_ms()
     pulse_diff = time.ticks_diff(now, last_pulse_time)
-
-    if pulse_diff < MIN_PULSE_MS:
+    if pulse_diff < MIN_PULSE_INTERVAL_MS:
         return
-    if pulse_diff < DEBOUNCE_MS:
+    # Reject physically impossible flow rates. With PULSES_PER_LITER=5880 this
+    # works out to ~0.3ms, below the 1ms debounce, so it only guards extreme flow.
+    if pulse_diff < 60000 // (MAX_FLOW_RATE * PULSES_PER_LITER):
         return
-
-    # Reject physically impossible flow rates
-    inst_flow = (1 / (pulse_diff / 1000)) * 60 / PULSES_PER_LITER
-    if inst_flow > MAX_FLOW_RATE:
-        return
-
     last_pulse_time = now
     pulse_count += 1
 
@@ -95,14 +89,6 @@ def human_duration(ms):
         return f"{minutes}m {seconds}s"
     return f"{total_seconds}s"
 
-
-def log_boot(state):
-    if state["stay_awake_enabled"]:
-        log("Boot — wake toggle ON")
-    else:
-        log("Boot — deepsleep, will sleep after publish")
-    log(f"  dispensed={state['keg_dispensed']}L, "
-        f"pulses={state['total_pulses']}")
 
 # ─── WiFi ─────────────────────────────────────────────────────────────────────
 
@@ -170,44 +156,22 @@ def wait_minimum_window(boot_time):
         log(f"Waiting {remaining:.0f}s minimum awake window...")
         time.sleep(remaining)
 
-# ─── MQTT Callback ────────────────────────────────────────────────────────────
-
-def make_callback(get_state, set_state):
-    """
-    Returns an MQTT callback that closes over state accessors.
-    get_state() returns current state dict.
-    set_state(s) replaces state with new dict and persists it.
-    """
-    def callback(topic, msg):
-        s = get_state()
-        if topic == MQTT_CONFIG["topic_reset"]:
-            s = state_module.on_reset(s)
-            log("Keg reset")
-        elif topic == MQTT_CONFIG["topic_wake"]:
-            if msg == b"ON":
-                s["stay_awake_enabled"] = True
-                log("Wake mode ON (toggled)")
-            elif msg == b"OFF":
-                s["stay_awake_enabled"] = False
-                log("Wake mode OFF (toggled)")
-        set_state(s)
-    return callback
-
 # ─── Publish Cycle ────────────────────────────────────────────────────────────
 
-def publish_cycle(state_ref, wlan, callback, discovery_done, now):
+def publish_cycle(state_ref, callback, discovery_done, now):
     """
     Accumulate pulses, compute payload, publish to MQTT, listen for commands,
-    clear retained wake message. Returns updated discovery_done.
+    clear retained wake message. Returns updated_discovery_done.
+    state_ref is a one-element list shared with the callback so mutations
+    during listen() are visible after the cycle.
     """
     global pulse_count
-    state = state_ref[0]
 
     # Snapshot + reset pulse_count, accumulate into state
     count = pulse_count
     pulse_count = 0
-    state = state_module.on_pulse(state, count, PULSES_PER_LITER)
-    state_ref[0] = state
+    state_ref[0] = state_module.on_pulse(state_ref[0], count, PULSES_PER_LITER)
+    state = state_ref[0]
 
     # Compute derived values and payload
     elapsed = now - state["last_publish"] if state["last_publish"] else PUBLISH_INTERVAL
@@ -219,8 +183,9 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
     keg_remaining = calculations.calculate_keg_remaining(state["keg_dispensed"], KEG_VOLUME_LITERS)
     keg_percent = calculations.calculate_keg_percent(keg_remaining, KEG_VOLUME_LITERS)
     last_updated = calculations.format_timestamp(now, TIMEZONE_BASE)
-    payload = calculations.build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent,
-                                              last_updated=last_updated)
+    payload = calculations.build_mqtt_payload(
+        flow_rate, total_volume, keg_remaining, keg_percent, last_updated
+    )
 
     # Connect MQTT — fail fast, skip publish if connect fails
     try:
@@ -233,7 +198,6 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
     try:
         if not discovery_done:
             mqtt_module.publish_discovery(client, MQTT_CONFIG)
-            client.publish(b"homeassistant/button/flow_sensor/wake/config", b"", retain=True)
             discovery_done = True
         mqtt_module.publish_state(client, payload, MQTT_CONFIG)
         wake_state = "ON" if state["stay_awake_enabled"] else "OFF"
@@ -246,23 +210,18 @@ def publish_cycle(state_ref, wlan, callback, discovery_done, now):
     except Exception as e:
         log(f"MQTT error: {e}")
 
-    # Always disconnect — not wrapped in try/except
     mqtt_module.disconnect(client)
 
-    # Record publish time and persist
     state_ref[0] = state_module.on_publish(state_ref[0], now)
     state_module.save(state_ref[0])
     return discovery_done
 
 # ─── Sleep/Tick ───────────────────────────────────────────────────────────────
 
-def sleep_or_tick(state_ref, wlan, boot_time, sensor_pin):
+def sleep_or_tick(state, wlan, boot_time, sensor_pin):
     """Either enter deepsleep or sleep 1s while toggle is active."""
-    current = state_ref[0]
-
-    if state_module.should_sleep(current):
+    if state_module.should_sleep(state):
         wait_minimum_window(boot_time)
-        state_module.save(current)
         disconnect_wifi(wlan)
         enter_deepsleep(sensor_pin)
     else:
@@ -275,22 +234,36 @@ def main():
 
     sensor_pin, wlan, boot_time = boot_init()
     state = state_module.load()
-    log_boot(state)
+
+    if state["stay_awake_enabled"]:
+        log("Boot — wake toggle ON")
+    else:
+        log("Boot — deepsleep, will sleep after publish")
+    log(f"  dispensed={state['keg_dispensed']}L, pulses={state['total_pulses']}")
 
     discovery_done = False
     state_ref = [state]
 
-    def update_state(s):
-        state_ref[0] = s
-        state_module.save(s)
-
-    callback = make_callback(lambda: state_ref[0], update_state)
+    def callback(topic, msg):
+        if topic == MQTT_CONFIG["topic_reset"]:
+            state_ref[0] = state_module.on_reset(state_ref[0])
+            state_module.save(state_ref[0])
+            log("Keg reset")
+        elif topic == MQTT_CONFIG["topic_wake"]:
+            if msg == b"ON":
+                state_ref[0]["stay_awake_enabled"] = True
+                state_module.save(state_ref[0])
+                log("Wake mode ON (toggled)")
+            elif msg == b"OFF":
+                state_ref[0]["stay_awake_enabled"] = False
+                state_module.save(state_ref[0])
+                log("Wake mode OFF (toggled)")
 
     while True:
         now = time.time()
         if state_module.should_publish(state_ref[0], now, PUBLISH_INTERVAL):
-            discovery_done = publish_cycle(state_ref, wlan, callback, discovery_done, now)
-        sleep_or_tick(state_ref, wlan, boot_time, sensor_pin)
+            discovery_done = publish_cycle(state_ref, callback, discovery_done, now)
+        sleep_or_tick(state_ref[0], wlan, boot_time, sensor_pin)
 
 if __name__ == "__main__":
     main()

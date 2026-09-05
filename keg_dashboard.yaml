@@ -18,7 +18,7 @@ cards:
     entities:
       - entity: sensor.keg_remaining
         name: Liters Remaining
-      - entity: sensor.water_flow_rate
+      - entity: sensor.flow_rate
         name: Flow Rate
-      - entity: sensor.water_total_volume
+      - entity: sensor.total_volume
         name: Dispensed

@@ -40,7 +40,7 @@ cards:
       - entity: sensor.keg_remaining
         name: Remaining (L)
         icon: mdi:beer-outline
-      - entity: sensor.water_flow_rate
+      - entity: sensor.flow_rate
         name: Flow Rate
         icon: mdi:water-pump
 
@@ -74,5 +74,5 @@ cards:
     hours_to_show: 24
     refresh_interval: 30
     entities:
-      - entity: sensor.water_flow_rate
+      - entity: sensor.flow_rate
         name: L/min

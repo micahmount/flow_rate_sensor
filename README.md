@@ -43,16 +43,17 @@ lsusb             # List USB devices (ESP32 shows as "CP2102" or "CH340")
 
 ## What Gets Reported to Home Assistant
 
-The ESP32 automatically publishes the following data to Home Assistant via MQTT:
+The ESP32 automatically publishes a JSON state payload to `home/flow_sensor/state` every publish cycle:
 
-| Entity | MQTT Topic | Description |
-|--------|------------|-------------|
-| Flow Rate | `home/flow_sensor/flow_rate` | Current flow rate in L/min |
-| Dispensed | `home/flow_sensor/total_volume` | Total beer dispensed from the keg (L) |
-| Remaining | `home/flow_sensor/keg_remaining` | Liters remaining in the keg |
-| Keg Level | `home/flow_sensor/keg_level` | Keg fullness as a percentage (0-100%) |
+| Entity | Payload Key | Description |
+|--------|-------------|-------------|
+| Flow Rate | `flow_rate` | Current flow rate in L/min |
+| Dispensed | `total_volume` | Total beer dispensed from the keg (L) |
+| Remaining | `keg_remaining` | Liters remaining in the keg |
+| Keg Level | `keg_percent` | Keg fullness as a percentage (0-100) |
+| Last Updated | `last_updated` | Timestamp of the last publish |
 
-Home Assistant auto-discovers these as sensor entities automatically — no manual configuration required. A wake button is also auto-discovered to keep the device awake for WebREPL access.
+Home Assistant auto-discovers all of these as sensor entities — no manual configuration required. A **Reset Keg** button and a **Stay Awake** switch are auto-discovered too (see below).
 
 ---
 
@@ -73,11 +74,11 @@ Home Assistant auto-discovers these as sensor entities automatically — no manu
 
 ## How It Works
 
-The flow sensor contains a small plastic rotor with a magnet. As beer flows through it, the rotor spins and the built-in hall effect sensor emits a pulse for every rotation. The ESP32 counts these pulses using a hardware interrupt and converts them to flow rate and volume using the sensor's calibration formula:
+The flow sensor contains a small plastic rotor with a magnet. As beer flows through it, the rotor spins and the built-in hall effect sensor emits a pulse for every rotation. The ESP32 counts these pulses using a hardware interrupt and converts them to flow rate and volume using the sensor's calibration constant (`PULSES_PER_LITER`):
 
-> **Flow rate (L/min) = pulse frequency (Hz) ÷ 23**
+> **Flow rate (L/min) = pulse frequency (Hz) × 60 ÷ PULSES_PER_LITER**
 
-Every 30 seconds (or on flow detection), the ESP32 wakes up, publishes the current flow rate, total volume dispensed from the keg, liters remaining, and keg percentage to Home Assistant over MQTT, then enters lightsleep to conserve battery. Home Assistant auto-discovers these as sensor entities — no manual configuration required.
+The device deepsleeps to conserve battery, waking every 4.5 minutes — and immediately whenever a pour is detected — to publish the current flow rate, total volume dispensed from the keg, liters remaining, and keg percentage to Home Assistant over MQTT. While awake it publishes every 30 seconds. Home Assistant auto-discovers all entities — no manual configuration required.
 
 ---
 
@@ -99,7 +100,7 @@ Connect the sensor's wires to the ESP32 as follows:
 
 ## Home Assistant Setup
 
-Since you're running Home Assistant Container (without the Apps panel), you'll run Mosquitto as a separate Docker container using docker-compose.
+Mosquitto must run somewhere on your network. If you use Home Assistant OS or Supervised, the easiest option is the **Mosquitto broker** add-on (Settings → Add-ons → Mosquitto broker). The steps below cover the Docker/Container case, running Mosquitto as a separate container.
 
 ### Step 1 — Set Up Mosquitto with Docker Compose
 
@@ -221,16 +222,14 @@ Copy `secrets.py.example` to `secrets.py` and fill in your details:
 WIFI_SSID     = "your_wifi_ssid"
 WIFI_PASSWORD = "your_wifi_password"
 
-MQTT_BROKER   = "192.168.1.100"   # Your Docker host's IP address
+MQTT_BROKER   = "192.168.1.100"   # Your MQTT broker / Home Assistant IP address
 MQTT_PORT     = 1883
 MQTT_USER     = "mqtt_esp32"      # Username from mosquitto_passwd command
 MQTT_PASSWORD = "your_password"   # Password from mosquitto_passwd command
 MQTT_CLIENT_ID = "esp32_flow_sensor"
 ```
 
-To find your Docker host IP address, run `hostname -I` on the machine running Docker.
-
-To find your Home Assistant IP address, go to **Settings → System → Network** in HA.
+To find the IP to use for `MQTT_BROKER`, run `hostname -I` on the machine running the broker (the Home Assistant VM/host).
 
 ### Step 2 — Upload the Files
 
@@ -245,6 +244,12 @@ mpremote connect /dev/ttyUSB0 fs cp main.py :main.py
 
 # Deploy calculations.py
 mpremote connect /dev/ttyUSB0 fs cp calculations.py :calculations.py
+
+# Deploy state.py
+mpremote connect /dev/ttyUSB0 fs cp state.py :state.py
+
+# Deploy mqtt.py
+mpremote connect /dev/ttyUSB0 fs cp mqtt.py :mqtt.py
 
 # (Optional) Deploy fresh state file
 mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json
@@ -282,120 +287,51 @@ mpremote connect /dev/ttyUSB0 reset
 Or press the Reset button on the ESP32. Watch the output — you should see:
 
 ```bash
-Connecting to WiFi...
-WiFi connected: 192.168.1.XXX
-MQTT connected
-Auto-discovery published to Home Assistant
-Published → flow: 0.0 L/min | keg: 18.93L (100.0%)
-Entering lightsleep for 270000ms...
+[2026-07-13 10:01:05] Connecting to WiFi...
+[2026-07-13 10:01:08] WiFi connected: 192.168.1.XXX
+[2026-07-13 10:01:09] NTP synced
+[2026-07-13 10:01:09] WebREPL at ws://192.168.1.XXX:8266
+[2026-07-13 10:01:09] Boot — deepsleep, will sleep after publish
+[2026-07-13 10:01:09]   dispensed=0.0L, pulses=0
+[2026-07-13 10:01:38] Published — flow: 0.0 L/min | remaining: 18.93L (100.0%)
+[2026-07-13 10:02:08] Entering deepsleep for 4m 30s...
 ```
 
-In Home Assistant, go to **Settings → Devices & Services → MQTT** and you should see a new device called **Flow Sensor** with six entities:
+In Home Assistant, go to **Settings → Devices & Services → MQTT** and you should see a new device called **Flow Rate Sensor** with these entities:
 
-- `sensor.water_flow_rate` — current flow rate in L/min
-- `sensor.water_total_volume` — all-time total volume in L
-- `sensor.keg_level` — keg fullness as a percentage
+- `sensor.flow_rate` — current flow rate in L/min
+- `sensor.total_volume` — total volume dispensed from the keg (L)
 - `sensor.keg_remaining` — liters left in the keg
+- `sensor.keg_level` — keg fullness as a percentage
+- `sensor.last_updated` — timestamp of the last publish
 - `button.flow_sensor_reset_keg` — resets the keg dispensed counter to zero
-- `button.flow_sensor_stay_awake` — keeps the device awake for 5 minutes (for OTA/WebREPL access)
+- `switch.flow_sensor_stay_awake` — keeps the device awake for WebREPL access
 
 ---
 
 ## Setting Up the Dashboard in Home Assistant
 
-### Option 1: Using the UI (Recommended)
+All entities are auto-discovered, so you can use any cards you like. Two sample dashboards ship with this repo:
 
-The easiest way to create a dashboard is using Home Assistant's built-in UI:
+- **`keg_dashboard.yaml`** — simple YAML dashboard (gauge + entity list), no extra components
+- **`keg_dashboard_card.yaml`** — vertical-stack that uses the HACS **bar-card** (install `custom:bar-card` from HACS first)
 
-1. Go to **Settings** → **Dashboards**
-2. Click **Add Dashboard**
-3. Choose **Sections** view (recommended) or **Masonry**
-4. Click **Add Card** and add the following cards:
+To load a YAML dashboard: **Settings → Dashboards → Add Dashboard → YAML**, then paste the file's contents.
 
-**Card 1 - Keg Level Gauge:**
+To build cards in the UI, add a card and pick from these entities:
 
-- Card type: **Gauge**
-- Entity: `sensor.keg_level`
-- Min: 0, Max: 100
-- Unit: `%`
-- Color: Amber (or use theme colors)
+- `sensor.flow_rate`, `sensor.total_volume`, `sensor.keg_remaining`, `sensor.keg_level`, `sensor.last_updated`
+- `button.flow_sensor_reset_keg` — press to zero the dispensed counter for a new keg
+- `switch.flow_sensor_stay_awake` — disables deepsleep for remote WebREPL access
 
-**Card 2 - Flow Stats:**
-
-- Card type: **Entities** (or **Statistic** card if available)
-- Add entities:
-  - `sensor.keg_remaining` (liters left)
-  - `sensor.flow_rate` (L/min)
-  - `sensor.total_volume` (total dispensed)
-
-**Card 3 - Reset Button:**
-
-- Card type: **Button**
-- Entity: Create a helper (Settings → Devices & Services → Helpers → Button) with MQTT action
-- Or use an **MQTT Button** (see configuration below)
-
-### Option 2: Using YAML (Advanced)
-
-If you prefer YAML mode dashboards:
-
-```yaml
-# configuration.yaml
-mqtt:
-  button:
-    - name: "Reset Keg"
-      command_topic: "home/flow_sensor/reset"
-      payload_press: "RESET"
-```
-
-Then add a YAML dashboard:
-
-```yaml
-# dashboards/keg.yaml
-title: Keg Monitor
-views:
-  - title: Keg
-    cards:
-      - type: gauge
-        entity: sensor.keg_level
-        min: 0
-        max: 100
-        unit: '%'
-      - type: entities
-        entities:
-          - entity: sensor.keg_remaining
-            name: Remaining
-          - entity: sensor.flow_rate
-            name: Flow Rate
-          - entity: sensor.total_volume
-            name: Total Volume
-```
-
-### Reset Button via MQTT
-
-To add a reset button that appears in HA:
-
-```yaml
-# configuration.yaml
-mqtt:
-  button:
-    - name: "Reset Keg"
-      command_topic: "home/flow_sensor/reset"
-      payload_press: "RESET"
-```
-
-After adding to configuration.yaml, restart Home Assistant.
-
----
+No `configuration.yaml` MQTT entries are needed — the button and switch are created automatically by auto-discovery.
 
 ## Resetting for a New Keg
 
-When you put on a fresh keg, tap the **🔄 New Keg — Reset to Full** button on the dashboard. This publishes a reset message to `home/flow_sensor/reset` via MQTT, which tells the ESP32 to set the dispensed volume back to zero and treat the keg as 100% full.
-
-You can also trigger the reset from any MQTT client, or via a Home Assistant automation, by publishing any message to:
-
-```bash
-home/flow_sensor/reset
-```
+When you put on a fresh keg, press the **Reset Keg** button in Home Assistant
+(`button.flow_sensor_reset_keg`), or publish any message to `home/flow_sensor/reset` from any
+MQTT client or automation. This tells the ESP32 to set the dispensed volume back to zero and
+treat the keg as 100% full again.
 
 ---
 
@@ -408,14 +344,14 @@ The ESP32 persists its state to flash storage so it survives deepsleep cycles an
 The device stores state in `/flow_state.json` on the ESP32's flash filesystem:
 
 ```json
-{"keg_dispensed": 0.0, "total_pulses": 0, "stay_awake": 0}
+{"keg_dispensed": 0.0, "total_pulses": 0, "stay_awake_enabled": false}
 ```
 
 | Field | Description | Reset? |
 |-------|-------------|--------|
-| `keg_dispensed` | Liters poured from current keg | Yes — MQTT reset |
+| `keg_dispensed` | Liters poured from current keg | Yes — Reset Keg button |
 | `total_pulses` | Lifetime pulse count | No — never reset |
-| `stay_awake` | Seconds to stay awake | No — set by wake command |
+| `stay_awake_enabled` | Whether the Stay Awake switch is ON | No — toggled in HA |
 
 A `flow_state.json` template is included in the project directory. You can deploy it to the device:
 
@@ -425,25 +361,24 @@ mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json
 
 ### When State is Saved
 
-- **Before entering deepsleep** — so state survives the sleep/wake cycle
-- **After MQTT reset command** — persists the keg reset to flash
-- **After MQTT wake command** — persists the wake timeout to flash
-- **Every second while awake** — keeps `stay_awake` countdown up to date
+- **After each MQTT publish cycle** — so state survives the sleep/wake cycle
+- **After an MQTT reset command** — persists the keg reset to flash
+- **After the Stay Awake switch is toggled** — persists the toggle to flash
 
 ### Resetting State
 
-**From Home Assistant:** Publish to `home/flow_sensor/reset` — sets `keg_dispensed` to 0.0.
-
-**From the device button:** Pressing the reset button on the ESP32 reboots it. On reboot, `keg_dispensed` is loaded from flash. Note: the device resets `keg_dispensed` to 0.0 on every boot (simulating a fresh keg on each physical reset).
-
-**From MQTT (full reset):** Publish to `home/flow_sensor/reset` repeatedly for 10 seconds. The device listens for commands for 2 seconds after each publish cycle, so multiple presses will catch it.
+**From Home Assistant:** Press the auto-discovered **Reset Keg** button (`button.flow_sensor_reset_keg`), or publish any message to `home/flow_sensor/reset` from any MQTT client or automation.
 
 **Manually on device:** Connect via WebREPL or mpremote:
 
 ```python
-import calculations
-calculations.save_state(keg_dispensed=0.0, total_pulses=0, stay_awake=0)
+import state as state_module
+s = state_module.load()
+s["keg_dispensed"] = 0.0
+state_module.save(s)
 ```
+
+The device subscribes to `home/flow_sensor/reset` and acts on commands during the 5-second command window after each publish (`COMMAND_LISTEN_SECONDS`). Because the reset button publishes with retain, a press while the device is asleep is applied on its next wake.
 
 ### Viewing State
 
@@ -455,42 +390,33 @@ mpremote connect /dev/ttyUSB0 eval "open('/flow_state.json').read()"
 
 ## Waking the Device for WebREPL Access
 
-The ESP32 spends most of its time in lightsleep to conserve battery. To access WebREPL or make code changes:
+The ESP32 spends most of its time in deepsleep to conserve battery. It is only
+reachable over the network while awake.
 
-### Option 1: MQTT Wake Button (Recommended)
+### Enable the Stay Awake Switch
 
-Add an MQTT Button to Home Assistant to wake the device:
+Turn on the **Stay Awake** switch in Home Assistant (auto-discovered as a switch).
+This disables deepsleep indefinitely, keeping the device awake for WebREPL access.
 
-```yaml
-# configuration.yaml
-mqtt:
-  button:
-    - name: "Flow Sensor Wake"
-      command_topic: "home/flow_sensor/wake"
-      payload_press: "WAKE"
+### Connect via WebREPL
+
+Find the device IP (`WebREPL at ws://<esp32-ip>:8266` in the boot log, or in
+Home Assistant). Then connect (WebREPL password is in 1Password):
+
+```bash
+# REPL over the network
+python webrepl_cli.py <esp32-ip>    # interactive REPL
+# Exit: Ctrl+] or Ctrl+X
+
+# Copy files to the device over the network:
+#   get  <remote> <local>   → download from device
+#   put  <local> <remote>   → upload to device
+python webrepl_cli.py <esp32-ip> put main.py /main.py
 ```
 
-Restart Home Assistant, then click the button to wake the device. It will stay awake for 5 minutes, giving you time to connect to WebREPL at `ws://<esp32-ip>:8266`.
+Toggle the Stay Awake switch off when done to resume normal deepsleep operation.
 
-#### MQTT Reset Button
-
-To add a reset button in Home Assistant:
-
-```yaml
-# configuration.yaml
-mqtt:
-  button:
-    - name: "Flow Sensor Wake"
-      command_topic: "home/flow_sensor/wake"
-      payload_press: "WAKE"
-    - name: "Reset Keg"
-      command_topic: "home/flow_sensor/reset"
-      payload_press: "RESET"
-```
-
-Restart Home Assistant after adding these buttons.
-
-### Option 2: Wait for Next Wake Cycle
+### Wait for Next Wake Cycle
 
 The device wakes every 4.5 minutes to publish data. During this window, you can connect to WebREPL.
 
@@ -500,12 +426,12 @@ The device wakes every 4.5 minutes to publish data. During this window, you can 
 
 The ESP32 uses **deepsleep** mode to achieve long battery life:
 
-- **Active:** ~150-250mA (WiFi + MQTT publishing, ~2 seconds per cycle)
+- **Active:** ~150-250mA (WiFi + MQTT publishing, ~30 seconds per cycle)
 - **Sleep:** ~10µA (deepsleep with RAM off, only RTC running)
 
 On a 10,000 mAh battery bank, expect **~4-6 months** of operation under normal use.
 
-> **Note:** The device shows "offline" in Home Assistant while in deepsleep. It only shows "online" briefly when it wakes to publish (~2 seconds every 4.5 minutes).
+> **Note:** The device shows "offline" in Home Assistant while in deepsleep. It only appears "online" during the ~30-second minimum awake window every 4.5 minutes (`MINIMUM_AWAKE_SECONDS`).
 
 ### Configuration
 
@@ -513,11 +439,12 @@ Key settings in `main.py`:
 
 | Constant | Default | Description |
 | ---------- | --------- | ------------- |
-| `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes |
-| `SLEEP_INTERVAL` | 270000ms | Lightsleep duration (4.5 minutes) |
-| `WAKE_TIMEOUT_SECONDS` | 300 | Time to stay awake after wake command (5 min) |
-| `TIMEZONE_SECONDS` | -28800 | Timezone offset in seconds (-8×60×60 for PST) |
-| `PULSES_PER_LITER` | 450 | Sensor calibration (pulses per liter) |
+| `PUBLISH_INTERVAL` | 30s | Time between MQTT publishes while awake |
+| `SLEEP_INTERVAL` | 270000ms | Deepsleep duration (4.5 minutes) |
+| `COMMAND_LISTEN_SECONDS` | 5 | Seconds to listen for HA commands after each publish |
+| `MINIMUM_AWAKE_SECONDS` | 30 | Minimum time the device stays awake per cycle |
+| `TIMEZONE_BASE` | -28800 | Timezone offset in seconds (-8×60×60 for PST) |
+| `PULSES_PER_LITER` | 5880 | Sensor calibration (pulses per liter) — in `calculations.py` |
 
 ---
 
@@ -539,13 +466,13 @@ Check your wiring — particularly the yellow signal wire on GPIO 4. Make sure t
 This can happen if the keg was tapped when already partially empty and then reset at that point rather than when full. Just hit the Reset button when you put on a known-full keg going forward.
 
 **Readings seem inaccurate**
-The sensor's calibration constant (450 pulses per liter) is nominal. If you want higher accuracy, you can calibrate it yourself by pouring a known volume (e.g. exactly 1 liter into a measuring jug) and adjusting the `PULSES_PER_LITER` constant in `main.py` based on the actual pulse count observed.
+The sensor's calibration constant (`PULSES_PER_LITER = 5880` in `calculations.py`) comes from the datasheet formula `F (Hz) = 98 × Q (L/min)` — so 5880 pulses per liter. If you want to check/refine it, pour a precisely measured volume (e.g. exactly 1 liter into a measuring jug) and set `PULSES_PER_LITER` to the pulse count actually observed.
 
 **State not persisting across deepsleep**
-The state file (`/flow_state.json`) must exist on the device. If the device was never deployed with a state file, deploy it: `mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json`
+The state file (`/flow_state.json`) should exist on the device. If it's missing or corrupt, the device falls back to a fresh state on boot — redeploy it: `mpremote connect /dev/ttyUSB0 fs cp flow_state.json :flow_state.json`
 
 **Device shows offline in Home Assistant**
-This is expected behavior — the device is in deepsleep most of the time. It only appears online briefly (~2 seconds) when it wakes to publish. Use the MQTT wake button to keep it online for 5 minutes.
+This is expected behavior — the device is in deepsleep most of the time. It only appears online during the ~30-second minimum awake window every 4.5 minutes. Turn on the Stay Awake switch (`switch.flow_sensor_stay_awake`) to keep it online for WebREPL access.
 
 ---
 
@@ -554,13 +481,15 @@ This is expected behavior — the device is in deepsleep most of the time. It on
 | File | Description |
 | --- | --- |
 | `main.py` | Main ESP32 firmware — deploy as `main.py` on the device |
-| `calculations.py` | Pure functions for flow rate, keg calculations, state persistence |
+| `calculations.py` | Flow rate, keg math, MQTT payload, timestamps |
+| `state.py` | State persistence and transitions (`on_reset`, `on_pulse`, `on_publish`) |
+| `mqtt.py` | MQTT connect/disconnect, publishing, HA auto-discovery |
+| `webrepl_cli.py` | WebREPL client for remote connection and file transfer |
 | `secrets.py.example` | Template for WiFi/MQTT credentials — copy to `secrets.py` and configure |
 | `flow_state.json` | Persisted device state — deploy to device for a fresh start |
-| `tests/` | Host tests for `calculations.py` (run with `pytest tests/`) |
-| `mosquitto/` | Docker Compose config for Mosquitto broker — copy to Docker host and run |
-| `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with Bar Card (requires HACS) |
-| `keg_dashboard.yaml` | Simple YAML dashboard without custom cards (fallback option) |
+| `tests/test_device.py` | On-device tests (run with `mpremote`, see AGENTS.md) |
+| `keg_dashboard_card.yaml` | Home Assistant dashboard YAML with bar-card (requires HACS) |
+| `keg_dashboard.yaml` | Simple YAML dashboard without custom cards |
 
 ---
 
