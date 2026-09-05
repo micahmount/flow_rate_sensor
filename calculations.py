@@ -4,17 +4,14 @@ import ujson
 
 # ─── Flow Rate ────────────────────────────────────────────────────────────────
 
-PULSES_PER_LITER = 684  # Empirically calibrated (2026-07-01, 345ml test pour)
+PULSES_PER_LITER = 5880  # Datasheet: F (Hz) = 98 x Q (L/min), so pulses/L = 98 * 60
 
 
-def calculate_flow_rate(pulse_count, elapsed, pulses_per_liter=PULSES_PER_LITER):
-    """
-    Calculate flow rate in L/min from pulse count and elapsed seconds.
-    """
+def calculate_flow_rate(pulse_count, elapsed, pulses_per_liter):
+    """Calculate flow rate in L/min from pulse count and elapsed seconds."""
     if elapsed < 0.1:
         return 0
-    frequency = pulse_count / elapsed
-    return round(frequency / pulses_per_liter, 3)
+    return round(pulse_count / elapsed / pulses_per_liter * 60, 3)
 
 
 # ─── Keg ──────────────────────────────────────────────────────────────────────
@@ -41,16 +38,16 @@ def format_timestamp(epoch_seconds, base_offset):
 
 # ─── MQTT Payload ─────────────────────────────────────────────────────────────
 
-def build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent, **extra):
-    """Build a JSON MQTT payload string with optional extra fields."""
-    payload = {
+def build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent, last_updated="", *, version=""):
+    """Build a JSON MQTT payload string."""
+    return ujson.dumps({
         "flow_rate":     flow_rate,
         "total_volume":  total_volume,
         "keg_remaining": keg_remaining,
         "keg_percent":   keg_percent,
-    }
-    payload.update(extra)
-    return ujson.dumps(payload)
+        "last_updated":  last_updated,
+        "version":       version,
+    })
 
 
 # ─── Timezone ─────────────────────────────────────────────────────────────────

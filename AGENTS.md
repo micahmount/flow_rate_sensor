@@ -42,8 +42,7 @@ mpremote connect /dev/ttyUSB0 fs rm :test_device.py
 ```
 
 Tests cover: flow rate calculations, keg math, MQTT payload, state persistence,
-state transitions (on_reset, on_wake_command, on_pulse, on_publish, on_sleep_tick),
-and predicates (should_publish, should_sleep).
+state transitions (on_reset, on_pulse, on_publish), and predicates (should_publish, should_sleep).
 
 ---
 
@@ -97,7 +96,25 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 --baud 460800 write_flash -z 0x1000 
 
 ### Testing / REPL
 
-Connect to the ESP32 REPL via mpremote or minicom:
+The device deepsleeps whenever the Stay Awake switch is OFF, so it only accepts
+connections while awake. To connect over the network, enable the **Stay Awake** switch
+in Home Assistant first, then find the device's IP (in the WebREPL boot log or HA).
+
+Remote WebREPL connection (WebREPL password is stored in 1Password, item
+["ESP32 WebREPL"](https://start.1password.com/open/i?a=ZA7QIWQDIRFJ3I2ODNWLZZEHRE&v=72wcldx66iirrhlsaai6p27xfq&i=llo7hiepf7xyttplo2uhhsjmri&h=the-mounts.1password.com)):
+
+```bash
+# REPL over the network
+python webrepl_cli.py <esp32-ip>    # interactive REPL
+# Exit: Ctrl+] or Ctrl+X
+
+# Copy files to the device over the network:
+#   get  <remote> <local>   → download from device
+#   put  <local> <remote>   → upload to device
+python webrepl_cli.py <esp32-ip> put main.py /main.py
+```
+
+Serial connection (only when the device is physically attached via USB):
 
 ```bash
 # Using mpremote
@@ -227,16 +244,18 @@ except Exception:
 ### Adding New Features
 
 1. Run `pylint main.py` — target 10/10
-2. Deploy to ESP32 using mpremote
-3. Test on device (see Testing section)
-4. Monitor serial output
-5. Verify MQTT messages arrive in Home Assistant
+2. Bump `VERSION` in `main.py` on **every commit** — every commit is a version bump (no carve-out for docs or tests) — using [Semantic Versioning](https://semver.org/), and keep it in sync with the git release tag (`v<VERSION>`). Rules: **MAJOR** = breaking MQTT-interface change (topic/payload key removed or renamed), **MINOR** = backward-compatible feature (e.g. new payload key), **PATCH** = backward-compatible bug fix (e.g. calibration). Verify with `import main; main.VERSION` or the HA Firmware Version sensor
+3. Deploy to ESP32 using mpremote
+4. Test on device (see Testing section)
+5. Monitor serial output
+6. Verify MQTT messages arrive in Home Assistant
+7. When releasing, tag the release commit with exactly `v<VERSION>`: `git tag -a v<VERSION> -m "Release v<VERSION>"` and push the tag. The tag and `main.VERSION` must always match.
 
 ### Known Issues / Gotchas
 
 - MicroPython doesn't support all standard library modules
 - Memory is limited; avoid large data structures
-- The flow sensor calibration constant (`PULSES_PER_LITER = 450`) may need adjustment for accuracy
+- The flow sensor calibration constant (`PULSES_PER_LITER`) lives in `calculations.py` and may need adjustment for accuracy
 
 ### Configuration Required Before Deploy
 
@@ -250,6 +269,7 @@ MQTT_BROKER   = "192.168.1.100"   # Your Home Assistant VM's IP
 MQTT_PORT     = 1883
 MQTT_USER     = "mqtt_esp32"
 MQTT_PASSWORD = "your_password"
+MQTT_CLIENT_ID = "esp32_flow_sensor"
 ```
 
 ### Resources
@@ -264,10 +284,12 @@ MQTT_PASSWORD = "your_password"
 
 No manual HA config needed — install the Mosquitto add-on once via the HA UI,
 then the ESP32 publishes auto-discovery topics automatically.
-All entities (Flow Rate, Dispensed, Keg Level, Reset button, Wake button) appear
-automatically in HA.
+All entities (Flow Rate, Dispensed, Keg Level, Last Updated, Firmware Version, Reset button, Stay Awake switch)
+appear automatically in HA.
 
-### Wake Button
+### Stay Awake Switch
 
-The wake button is auto-discovered by the MQTT integration when the ESP32 boots.
-It sends a `WAKE` command to keep the device awake for 5 minutes (for WebREPL access).
+The Stay Awake switch keeps the device awake indefinitely (disables deepsleep) for WebREPL
+access or debugging. Turn it on to connect to the device remotely via WebREPL
+(`python webrepl_cli.py <esp32-ip>`); the device will not sleep until you toggle it off.
+Toggle it off when done to resume normal deepsleep operation.
