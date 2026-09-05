@@ -23,6 +23,7 @@ except ImportError as exc:
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
+VERSION                = "1.0.0"  # Bump on every firmware change (see README)
 FLOW_PIN               = 4
 KEG_VOLUME_LITERS      = 18.93     # 5 US gallon corny keg
 PUBLISH_INTERVAL       = 30        # seconds between publishes
@@ -184,7 +185,7 @@ def publish_cycle(state_ref, callback, discovery_done, now):
     keg_percent = calculations.calculate_keg_percent(keg_remaining, KEG_VOLUME_LITERS)
     last_updated = calculations.format_timestamp(now, TIMEZONE_BASE)
     payload = calculations.build_mqtt_payload(
-        flow_rate, total_volume, keg_remaining, keg_percent, last_updated
+        flow_rate, total_volume, keg_remaining, keg_percent, last_updated, version=VERSION
     )
 
     # Connect MQTT — fail fast, skip publish if connect fails
@@ -235,6 +236,7 @@ def main():
     sensor_pin, wlan, boot_time = boot_init()
     state = state_module.load()
 
+    log(f"Flow Sensor v{VERSION}")
     if state["stay_awake_enabled"]:
         log("Boot — wake toggle ON")
     else:

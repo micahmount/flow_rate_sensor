@@ -244,10 +244,11 @@ except Exception:
 ### Adding New Features
 
 1. Run `pylint main.py` — target 10/10
-2. Deploy to ESP32 using mpremote
-3. Test on device (see Testing section)
-4. Monitor serial output
-5. Verify MQTT messages arrive in Home Assistant
+2. Bump `VERSION` in `main.py` on every firmware change (check via `import main; main.VERSION` or the HA Firmware Version sensor)
+3. Deploy to ESP32 using mpremote
+4. Test on device (see Testing section)
+5. Monitor serial output
+6. Verify MQTT messages arrive in Home Assistant
 
 ### Known Issues / Gotchas
 
@@ -282,7 +283,7 @@ MQTT_CLIENT_ID = "esp32_flow_sensor"
 
 No manual HA config needed — install the Mosquitto add-on once via the HA UI,
 then the ESP32 publishes auto-discovery topics automatically.
-All entities (Flow Rate, Dispensed, Keg Level, Last Updated, Reset button, Stay Awake switch)
+All entities (Flow Rate, Dispensed, Keg Level, Last Updated, Firmware Version, Reset button, Stay Awake switch)
 appear automatically in HA.
 
 ### Stay Awake Switch

@@ -38,7 +38,7 @@ def format_timestamp(epoch_seconds, base_offset):
 
 # ─── MQTT Payload ─────────────────────────────────────────────────────────────
 
-def build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent, last_updated=""):
+def build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent, last_updated="", *, version=""):
     """Build a JSON MQTT payload string."""
     return ujson.dumps({
         "flow_rate":     flow_rate,
@@ -46,6 +46,7 @@ def build_mqtt_payload(flow_rate, total_volume, keg_remaining, keg_percent, last
         "keg_remaining": keg_remaining,
         "keg_percent":   keg_percent,
         "last_updated":  last_updated,
+        "version":       version,
     })
 
 

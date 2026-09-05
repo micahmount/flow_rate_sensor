@@ -148,6 +148,19 @@ def publish_discovery(client, config):
             },
         ),
         (
+            b"homeassistant/sensor/flow_sensor/version/config",
+            {
+                "name":                 "Firmware Version",
+                "unique_id":            "version",
+                "state_topic":          config["topic_state"].decode(),
+                "availability_topic":   config["topic_availability"].decode(),
+                "value_template":       "{{ value_json.version }}",
+                "icon":                 "mdi:creation",
+                "force_update":         True,
+                "device":               device,
+            },
+        ),
+        (
             b"homeassistant/button/flow_sensor/reset/config",
             {
                 "name":             "Reset Keg",
