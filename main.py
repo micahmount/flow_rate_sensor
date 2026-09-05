@@ -23,7 +23,7 @@ except ImportError as exc:
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-VERSION                = "1.3.0"  # Keep in sync with git tag v<VERSION> (see README)
+VERSION                = "1.3.1"  # Keep in sync with git tag v<VERSION> (see README)
 FLOW_PIN               = 4
 KEG_VOLUME_LITERS      = 18.93     # 5 US gallon corny keg
 PUBLISH_INTERVAL       = 30        # seconds between publishes
